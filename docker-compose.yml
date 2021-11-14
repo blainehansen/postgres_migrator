@@ -1,0 +1,11 @@
+version: '3'
+services:
+  experiment_database:
+    image: postgres:alpine
+    environment:
+      - POSTGRES_DB=experiment_db
+      - POSTGRES_USER=experiment_user
+      - POSTGRES_PASSWORD=asdf
+    ports:
+      - "5432:5432"
+    command: postgres -c 'max_wal_size=2GB'

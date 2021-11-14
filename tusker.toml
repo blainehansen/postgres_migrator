@@ -1,0 +1,8 @@
+[schema]
+filename = "schemas/schema.1.sql"
+
+[migrations]
+directory = "migrations"
+
+[database]
+url = 'postgres://experiment_user:asdf@localhost:5432/experiment_db?sslmode=disable'
