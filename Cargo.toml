@@ -4,4 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+postgres = "0.19"
 chrono = "0.4"
+regex = "*"
+
+[dev-dependencies]
+serial_test = "*"
