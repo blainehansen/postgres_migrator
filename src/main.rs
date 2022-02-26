@@ -100,6 +100,15 @@ fn db_migrate(client: &mut postgres::Client, raw_description: &str) -> SomeResul
 	let timestamp = create_timestamp();
 
 	let migration_up = "TODO";
+	// migration = migra.Migration(
+	// 	source,
+	// 	target,
+	// 	# self.config.database.schema
+	// )
+	// migration.set_safety(False)
+	// migration.add_all_changes(privileges=with_privileges)
+	// return migration.sql
+
 	// print('\n'.join([
 	// 	"creating migration file:",
 	// 	"===",
