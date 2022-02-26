@@ -141,7 +141,7 @@ fn db_compact(client: &mut postgres::Client) -> SomeResult<()> {
 
 
 fn db_up(client: &mut postgres::Client) -> SomeResult<()> {
-	client.execute("create table if not exists _schema_versions (version char(14) unique not null)", &[])?;
+	client.batch_execute("create table if not exists _schema_versions (version char(14) unique not null)")?;
 
 	let current_version: Option<String> = client
 		.query_opt("select max(version) as current from _schema_versions", &[])?
@@ -176,18 +176,50 @@ fn db_up(client: &mut postgres::Client) -> SomeResult<()> {
 
 
 fn main() -> SomeResult<()> {
-	let mut client = postgres::Config::new()
+	let mut main_config = postgres::Config::new();
+	main_config
 		.user("experiment_user")
 		.password("asdf")
 		.host("localhost")
 		.port(5432)
 		.dbname("experiment_db")
-		.ssl_mode(postgres::config::SslMode::Disable)
-		.connect(postgres::NoTls)?;
+		.ssl_mode(postgres::config::SslMode::Disable);
+
+	let mut client = main_config.connect(postgres::NoTls)?;
 
 	db_compact(&mut client)?;
 	db_migrate(&mut client, "yo yo")?;
 	db_up(&mut client)?;
 
 	Ok(())
+}
+
+
+const TEMP_DB_COMMENT: &'static str = "TEMP DB CREATED BY MIGRATOR";
+
+struct TempDb {
+	dbname: String,
+	client: postgres::Client,
+}
+
+impl TempDb {
+	fn new(dbname: String, suffix: &str, main_config: &postgres::Config) -> SomeResult<TempDb> {
+		let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+		let dbname = format!("{dbname}_{now}_{suffix}");
+
+		let mut main_client = main_config.connect(postgres::NoTls)?;
+		main_client.batch_execute(&format!(
+			"create database {dbname}; comment on database {dbname} is '{TEMP_DB_COMMENT}'"
+		))?;
+
+		let client = main_config.clone().dbname(&dbname).connect(postgres::NoTls)?;
+		Ok(TempDb{dbname, client})
+	}
+}
+
+impl Drop for TempDb {
+  fn drop(&mut self) {
+  	let dbname = &self.dbname;
+  	self.client.batch_execute(&format!("drop database {dbname}")).unwrap()
+  }
 }
