@@ -6,7 +6,9 @@ edition = "2021"
 [dependencies]
 postgres = "0.19"
 chrono = "0.4"
+pyo3 = "0.16"
 regex = "*"
+clap = { version = "*", features = ["derive"] }
 
 [dev-dependencies]
 serial_test = "*"

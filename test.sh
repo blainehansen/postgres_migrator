@@ -1,5 +1,7 @@
 set -euo pipefail
 
+# PGPASSWORD="asdf" psql -U experiment_user -h localhost experiment_db -c "select 1 as one"
+
 assert () {
 	E_PARAM_ERR=98
 	E_ASSERT_FAILED=99

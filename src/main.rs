@@ -95,26 +95,34 @@ fn test_list_migration_files() -> io::Result<()> {
 }
 
 
-fn db_migrate(client: &mut postgres::Client, raw_description: &str) -> SomeResult<()> {
+fn compute_diff(source_dbname: &str, target_dbname: &str) -> pyo3::PyResult<String> {
+	use pyo3::prelude::*;
+	Python::with_gil(|py| {
+		let get_diff: Py<PyAny> = PyModule::from_code(
+			py,
+			"def get_diff(source_dbname, target_dbname):
+				import migra
+				migration = migra.Migration(
+					source_dbname,
+					target_dbname,
+					# self.config.database.schema,
+				)
+				migration.set_safety(False)
+				migration.add_all_changes(privileges=True)
+				return migration.sql",
+			"", "",
+		)?.getattr("get_diff")?.into();
+
+		get_diff.call1(py, (source_dbname, target_dbname))?.extract(py)
+	})
+}
+
+
+fn command_migrate(raw_description: &str) -> SomeResult<()> {
 	let description_slug = make_slug(raw_description);
 	let timestamp = create_timestamp();
 
-	let migration_up = "TODO";
-	// migration = migra.Migration(
-	// 	source,
-	// 	target,
-	// 	# self.config.database.schema
-	// )
-	// migration.set_safety(False)
-	// migration.add_all_changes(privileges=with_privileges)
-	// return migration.sql
-
-	// print('\n'.join([
-	// 	"creating migration file:",
-	// 	"===",
-	// 	migration_up,
-	// 	"===",
-	// ]))
+	let migration_up = compute_diff("migrations", "schema")?;
 
 	ensure_migrations_directory()?;
 	fs::File::create(format!("./migrations/{timestamp}.{description_slug}.sql"))?
@@ -124,13 +132,13 @@ fn db_migrate(client: &mut postgres::Client, raw_description: &str) -> SomeResul
 }
 
 
-fn db_compact(client: &mut postgres::Client) -> SomeResult<()> {
-	db_migrate(client, "ensuring_current")?;
-	db_up(client)?;
+fn command_compact(client: &mut postgres::Client, source_dbname: &str, target_dbname: &str) -> SomeResult<()> {
+	command_migrate("ensuring_current", source_dbname, target_dbname)?;
+	command_up(client)?;
 
 	purge_migrations_directory()?;
 	ensure_migrations_directory()?;
-	db_migrate(client, "compacted_initial")?;
+	command_migrate("compacted_initial", source_dbname, target_dbname)?;
 	let migration_files = list_migration_files()?;
 	let version = migration_files[0].to_str().unwrap().split('.').nth(0).unwrap();
 	println!("new version number is: {version}", );
@@ -140,13 +148,13 @@ fn db_compact(client: &mut postgres::Client) -> SomeResult<()> {
 }
 
 
-fn db_up(client: &mut postgres::Client) -> SomeResult<()> {
+fn command_up(client: &mut postgres::Client) -> SomeResult<()> {
 	client.batch_execute("create table if not exists _schema_versions (version char(14) unique not null)")?;
 
 	let current_version: Option<String> = client
 		.query_opt("select max(version) as current from _schema_versions", &[])?
 		.map(|row| row.get("current"));
-	// println!("current version is: {current_version}");
+	// dbg!(current_version);
 
 	ensure_migrations_directory()?;
 	for migration_file in list_migration_files()? {
@@ -174,52 +182,150 @@ fn db_up(client: &mut postgres::Client) -> SomeResult<()> {
 	Ok(())
 }
 
+fn command_clean(main_config: &postgres::Config) -> SomeResult<()> {
+	let mut main_client = main_config.clone().dbname("template1").connect(postgres::NoTls)?;
+	let query = format!("
+		select databases.datname as dbname
+		from
+			pg_database as databases
+			join pg_shdescription as descriptions on descriptions.objoid = databases.oid
+		where descriptions.description = {TEMP_DB_COMMENT}
+	");
+	for row in main_client.query(&query, &[])? {
+		let dbname: String = row.get("dbname");
+		main_client.batch_execute(&format!("drop database if exists {dbname}"))?;
+	}
+
+	Ok(())
+}
+
+
+fn command_diff(arg: Type) -> RetType {
+	unimplemented!()
+}
+
+
+const TEMP_DB_COMMENT: &'static str = "'TEMP DB CREATED BY migrator'";
+
+struct TempDb {
+	dbname: String,
+	main_config: postgres::Config,
+}
+
+impl TempDb {
+	fn new(dbname: &str, suffix: &str, main_config: &postgres::Config) -> SomeResult<TempDb> {
+		let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+		let dbname = format!("{dbname}_{now}_{suffix}");
+
+		let mut main_client = main_config.clone().dbname("template1").connect(postgres::NoTls)?;
+		main_client.execute(&format!(
+			"create database {dbname}"
+		), &[])?;
+		main_client.batch_execute(&format!(
+			"comment on database {dbname} is {TEMP_DB_COMMENT}"
+		))?;
+
+		Ok(TempDb{dbname, main_config: main_config.clone()})
+	}
+}
+
+impl Drop for TempDb {
+	fn drop(&mut self) {
+		let dbname = &self.dbname;
+		let mut main_client = self.main_config.connect(postgres::NoTls).unwrap();
+		main_client.batch_execute(&format!("drop database if exists {dbname}")).unwrap();
+	}
+}
+
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser, Debug)]
+#[clap(author, version)]
+struct Args {
+	#[clap(subcommand)]
+	command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+	/// cleans the current instance of all temporary databases
+	Clean,
+
+	/// apply all migrations to database
+	Up,
+	/// ensure both database and migrations folder are current with schema, and compact to only one migration
+	Compact,
+	/// generate new migration and place in migrations folder
+	Migrate {
+		/// description of migration, will be converted to "snake_case"
+		migration_description: String,
+	},
+	Diff {
+		source: Backends,
+		target: Backends,
+	},
+
+	// Check,
+}
+
+#[derive(Debug)]
+enum Backends {
+	Migrations,
+	Schema,
+	Database,
+}
+
+impl Backends {
+	fn to_suffix(&self) -> &'static str {
+		match self {
+			Migrations => "migrations",
+			Schema => "schema",
+			Database => "database",
+		}
+	}
+}
+
 
 fn main() -> SomeResult<()> {
+	let args = Args::parse();
+	dbg!(args);
+	let main_dbname = "experiment_db";
 	let mut main_config = postgres::Config::new();
 	main_config
 		.user("experiment_user")
 		.password("asdf")
 		.host("localhost")
 		.port(5432)
-		.dbname("experiment_db")
+		.dbname(main_dbname)
 		.ssl_mode(postgres::config::SslMode::Disable);
 
-	let mut client = main_config.connect(postgres::NoTls)?;
+	match args.command {
+		Migrate{migration_description} => {
+			command_migrate(migration_description)?;
+		},
+		Up => {
+			command_up()?;
+		},
+		Clean => {
+			command_clean(main_config)?;
+		},
+		Compact => {
+			command_compact(main_config, source_dbname, target_dbname)?;
+		},
+		Diff{source, target} => {
+			let source_db = source.to_db()?;
+			let target_db = target.to_db()?;
 
-	db_compact(&mut client)?;
-	db_migrate(&mut client, "yo yo")?;
-	db_up(&mut client)?;
+			let diff = compute_diff(source_db.dbname(), target_db.dbname())?;
+			println!("{diff}");
+		},
+	}
+
+	// let migrations_temp = TempDb::new(main_dbname, "migrations", &main_config)?;
+	// println!("migrations_temp: {}", &migrations_temp.dbname);
+	// let schema_temp = TempDb::new(main_dbname, "schema", &main_config)?;
+	// println!("schema_temp: {}", &schema_temp.dbname);
 
 	Ok(())
-}
-
-
-const TEMP_DB_COMMENT: &'static str = "TEMP DB CREATED BY MIGRATOR";
-
-struct TempDb {
-	dbname: String,
-	client: postgres::Client,
-}
-
-impl TempDb {
-	fn new(dbname: String, suffix: &str, main_config: &postgres::Config) -> SomeResult<TempDb> {
-		let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-		let dbname = format!("{dbname}_{now}_{suffix}");
-
-		let mut main_client = main_config.connect(postgres::NoTls)?;
-		main_client.batch_execute(&format!(
-			"create database {dbname}; comment on database {dbname} is '{TEMP_DB_COMMENT}'"
-		))?;
-
-		let client = main_config.clone().dbname(&dbname).connect(postgres::NoTls)?;
-		Ok(TempDb{dbname, client})
-	}
-}
-
-impl Drop for TempDb {
-  fn drop(&mut self) {
-  	let dbname = &self.dbname;
-  	self.client.batch_execute(&format!("drop database {dbname}")).unwrap()
-  }
 }
