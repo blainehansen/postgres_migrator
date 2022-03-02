@@ -1,12 +1,10 @@
-FROM python:3-alpine
+FROM python:3
 
-COPY ./db.py /app/db.py
-COPY ./requirements.txt /app/requirements.txt
-
-RUN pip install -r /app/requirements.txt
-
-VOLUME /working
+RUN pip3 install migra~=3.0.0 psycopg2-binary~=2.9.3
 
 WORKDIR /working
 
-ENTRYPOINT ["python", "/app/db.py"]
+# ENTRYPOINT ["./migrator_binary"]
+
+
+# the real docker image will be a multi-stage build

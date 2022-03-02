@@ -1,7 +1,19 @@
 version: '3'
 services:
-  experiment_database:
+  migrator:
+    build: .
+    image: blainehansen/migrator
+    container_name: migrator
+    volumes:
+      - .:/working
+    depends_on:
+      - db
+    # https://stackoverflow.com/questions/38546755/docker-compose-keep-container-running
+    command: tail -F anything
+    tty: true
+  db:
     image: postgres:alpine
+    container_name: db
     environment:
       - POSTGRES_DB=experiment_db
       - POSTGRES_USER=experiment_user
