@@ -56,11 +56,11 @@ fn test_make_slug() {
 }
 
 
-fn list_migration_files() -> io::Result<Vec<PathBuf>> {
+fn list_sql_files(directory: &str) -> io::Result<Vec<PathBuf>> {
 	let mut entries = vec![];
 	let sql_extension = Some(std::ffi::OsStr::new("sql"));
 
-	for entry in fs::read_dir("./migrations")? {
+	for entry in fs::read_dir(directory)? {
 		let entry = entry?;
 		let path = entry.path();
 		if !path.is_dir() && path.extension() == sql_extension {
@@ -73,23 +73,23 @@ fn list_migration_files() -> io::Result<Vec<PathBuf>> {
 
 #[test]
 #[serial_test::serial]
-fn test_list_migration_files() -> io::Result<()> {
+fn test_list_sql_files() -> io::Result<()> {
 	purge_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
 	ensure_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
 
-	fs::File::create("./migrations/30_yo.sql")?;
-	fs::File::create("./migrations/10_yo.sql")?;
-	fs::create_dir("./migrations/yoyo.sql")?;
-	fs::File::create("./migrations/20_yo.sql")?;
-	fs::File::create("./migrations/40.txt")?;
-	fs::File::create("./migrations/yo")?;
-	fs::create_dir("./migrations/agh")?;
+	fs::File::create("migrations/30_yo.sql")?;
+	fs::File::create("migrations/10_yo.sql")?;
+	fs::create_dir("migrations/yoyo.sql")?;
+	fs::File::create("migrations/20_yo.sql")?;
+	fs::File::create("migrations/40.txt")?;
+	fs::File::create("migrations/yo")?;
+	fs::create_dir("migrations/agh")?;
 
-	let migration_files = list_migration_files()?;
+	let migration_files = list_sql_files(DEFAULT_MIGRATIONS_DIRECTORY)?;
 	assert_eq!(migration_files, vec![
-		PathBuf::from("./migrations/10_yo.sql"),
-		PathBuf::from("./migrations/20_yo.sql"),
-		PathBuf::from("./migrations/30_yo.sql"),
+		PathBuf::from("migrations/10_yo.sql"),
+		PathBuf::from("migrations/20_yo.sql"),
+		PathBuf::from("migrations/30_yo.sql"),
 	]);
 
 	purge_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
@@ -110,7 +110,7 @@ fn to_connection_string(config: &Config) -> String {
 	};
 	let port = config.get_ports().first().unwrap_or(&5432);
 	let dbname = config.get_dbname().unwrap_or("");
-	format!("postgresql:://{user_string}{host}:{port}/{dbname}")
+	format!("postgresql://{user_string}{host}:{port}/{dbname}")
 }
 
 #[test]
@@ -145,10 +145,23 @@ fn compute_diff(source: &Config, target: &Config) -> Result<String> {
 		.arg(to_connection_string(target))
 		.output()?;
 
-	if !output.status.success() {
-		return Err(anyhow!("migra failed: {}", output.status));
+	if output.stderr.len() != 0 {
+		return Err(anyhow!("migra failed: {}\n\n{}", output.status, String::from_utf8_lossy(&output.stderr)));
 	}
 	Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+
+fn apply_sql_files(config: &Config, directory: &str) -> Result<()> {
+	let mut client = config.connect(postgres::NoTls)?;
+	for sql_file in list_sql_files(directory)? {
+		let mut file = fs::File::open(sql_file)?;
+		let mut query = String::new();
+		file.read_to_string(&mut query)?;
+		client.batch_execute(&query)?;
+	}
+
+	Ok(())
 }
 
 
@@ -158,7 +171,9 @@ fn command_migrate(args: &Args, base_config: &Config, raw_description: &str) -> 
 	let version = create_timestamp();
 
 	let source = TempDb::new(&dbname, "migrations", &base_config)?;
+	apply_sql_files(&source.config, &args.migrations_directory)?;
 	let target = TempDb::new(&dbname, "schema", &base_config)?;
+	apply_sql_files(&target.config, &args.schema_directory)?;
 
 	let migration_up = compute_diff(&source.config, &target.config)?;
 
@@ -189,16 +204,18 @@ fn command_up(args: &Args, client: &mut postgres::Client) -> Result<()> {
 	client.batch_execute("create table if not exists _schema_versions (version char(14) unique not null)")?;
 
 	let current_version: Option<String> = client
-		.query_opt("select max(version) as current from _schema_versions", &[])?
-		.map(|row| row.get("current"));
-	// dbg!(current_version);
+		.query_one("select max(version) as current from _schema_versions", &[])?
+		.get("current");
 
 	ensure_migrations_directory(&args.migrations_directory)?;
-	for migration_file in list_migration_files()? {
+	for migration_file in list_sql_files(&args.migrations_directory)? {
+		let version = migration_file.file_name()
+			.and_then(|name| name.to_str())
+			.and_then(|name| name.split(".").nth(0))
+			.ok_or(anyhow!("unable to determine version: {:?}", migration_file))?;
 		let migration_file = migration_file.to_str().ok_or(anyhow!("not valid unicode: {:?}", migration_file))?;
-		let version = migration_file.split(".").nth(0).ok_or(anyhow!("doesn't have a version: {migration_file}"))?;
 		let mut perform_migration = || -> Result<()> {
-			println!("performing {migration_file}");
+			println!("performing {:?}", migration_file);
 			let mut file = fs::File::open(migration_file)?;
 			let mut migration_query = String::new();
 			file.read_to_string(&mut migration_query)?;
@@ -210,7 +227,7 @@ fn command_up(args: &Args, client: &mut postgres::Client) -> Result<()> {
 		match current_version {
 			None => perform_migration()?,
 			Some(ref current_version) if version > current_version.as_str() => perform_migration()?,
-			_ => println!("not performing {migration_file}"),
+			_ => println!("not performing {:?}", migration_file),
 		}
 	}
 
@@ -235,21 +252,38 @@ fn command_clean(mut base_config: Config) -> Result<()> {
 }
 
 
-// fn command_diff(args: &Args, base_config: &Config, source: Backend, target: Backend) -> Result<()> {
-// 	// let migrations_temp = TempDb::new(main_dbname, "migrations", &base_config)?;
-// 	// println!("migrations_temp: {}", &migrations_temp.dbname);
-// 	// let schema_temp = TempDb::new(main_dbname, "schema", &base_config)?;
-// 	// println!("schema_temp: {}", &schema_temp.dbname);
+fn ensure_db(args: &Args, dbname: &str, base_config: &Config, backend: Backend) -> Result<(Option<TempDb>, Config)> {
+	match backend {
+		Backend::Migrations => {
+			let temp = TempDb::new(dbname, "migrations", base_config)?;
+			apply_sql_files(&temp.config, &args.migrations_directory)?;
+			let config = temp.config.clone();
+			Ok((Some(temp), config))
+		},
+		Backend::Schema => {
+			let temp = TempDb::new(dbname, "schema", base_config)?;
+			apply_sql_files(&temp.config, &args.schema_directory)?;
+			let config = temp.config.clone();
+			Ok((Some(temp), config))
+		},
+		Backend::Database => Ok((None, base_config.clone())),
+	}
+}
 
+fn command_diff(args: &Args, base_config: &Config, source: Backend, target: Backend) -> Result<()> {
+	if source == target {
+		return Err(anyhow!("can't diff {:?} against itself", source))
+	}
 
-// 	let source_db = source.to_db()?;
-// 	let target_db = target.to_db()?;
+	let dbname = args.dbname.as_ref().ok_or(anyhow!("need a dbname to run migrate command"))?;
+	let source = ensure_db(args, dbname, base_config, source)?;
+	let target = ensure_db(args, dbname, base_config, target)?;
 
-// 	let diff = compute_diff(source, target)?;
-// 	println!("{diff}");
+	let diff = compute_diff(&source.1, &target.1)?;
+	println!("{diff}");
 
-// 	Ok(())
-// }
+	Ok(())
+}
 
 
 const TEMP_DB_COMMENT: &'static str = "'TEMP DB CREATED BY migrator'";
@@ -288,20 +322,20 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[clap(author, version)]
 struct Args {
-	#[clap(short, long)]
+	#[clap(long)]
 	user: Option<String>,
-	#[clap(short, long)]
-	password: Option<Vec<u8>>,
-	#[clap(short, long, default_value_t = String::from("localhost"))]
+	#[clap(long)]
+	password: Option<String>,
+	#[clap(long, default_value_t = String::from("localhost"))]
 	host: String,
-	#[clap(short, long, default_value_t = 5432)]
+	#[clap(long, default_value_t = 5432)]
 	port: u16,
-	#[clap(short, long)]
+	#[clap(long)]
 	dbname: Option<String>,
 
-	#[clap(short, long, default_value_t = String::from(DEFAULT_SCHEMA_DIRECTORY))]
+	#[clap(long, default_value_t = String::from(DEFAULT_SCHEMA_DIRECTORY))]
 	schema_directory: String,
-	#[clap(short, long, default_value_t = String::from(DEFAULT_MIGRATIONS_DIRECTORY))]
+	#[clap(long, default_value_t = String::from(DEFAULT_MIGRATIONS_DIRECTORY))]
 	migrations_directory: String,
 
 	#[clap(subcommand)]
@@ -322,23 +356,23 @@ enum Command {
 		/// description of migration, will be converted to "snake_case"
 		migration_description: String,
 	},
-	// /// prints out the sql diff necessary to convert `source` to `target`
-	// Diff {
-	// 	#[clap(arg_enum)]
-	// 	source: Backend,
-	// 	#[clap(arg_enum)]
-	// 	target: Backend,
-	// },
+	/// prints out the sql diff necessary to convert `source` to `target`
+	Diff {
+		#[clap(arg_enum)]
+		source: Backend,
+		#[clap(arg_enum)]
+		target: Backend,
+	},
 
 	// Check,
 }
 
-// #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ArgEnum)]
-// enum Backend {
-// 	Migrations,
-// 	Schema,
-// 	Database,
-// }
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ArgEnum)]
+enum Backend {
+	Migrations,
+	Schema,
+	Database,
+}
 
 
 fn main() -> Result<()> {
@@ -369,9 +403,9 @@ fn main() -> Result<()> {
 		Command::Compact => {
 			command_compact(&args, &base_config)?;
 		},
-		// Command::Diff{source, target} => {
-		// 	command_diff(&base_config, source, target)?;
-		// },
+		Command::Diff{source, target} => {
+			command_diff(&args, &base_config, source, target)?;
+		},
 	}
 
 	Ok(())
