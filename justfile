@@ -23,7 +23,7 @@ release SEMVER_PORTION: _status_clean test build integration_test
 	#!/usr/bin/env bash
 	set -euo pipefail
 
-	cargo bump -g {{SEMVER_PORTION}}
+	cargo bump {{SEMVER_PORTION}}
 
 	VERSION=$(grep '^version = "' Cargo.toml)
 	[[ $VERSION =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]
@@ -32,6 +32,8 @@ release SEMVER_PORTION: _status_clean test build integration_test
 	GIT_VERSION="v$VERSION"
 	echo $GIT_VERSION
 
+	git commit -am $GIT_VERSION
+	git tag $GIT_VERSION
 	docker tag blainehansen/migrator blainehansen/migrator:$VERSION
 	docker push blainehansen/migrator:$VERSION
 	docker push blainehansen/migrator:latest
