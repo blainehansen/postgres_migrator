@@ -105,6 +105,12 @@ create table fruit (
 
 Then running `migrator migrate 'remove color add flavor'` will generate `$date_timestamp.remove_color_add_flavor.sql` that will go from the previous state to the new state.
 
+# Credits
+
+- [`migra`](https://github.com/djrobstep/migra) for making it possible to diff schemas.
+- [`tusker`](https://github.com/bikeshedder/tusker) was the inspiration for using temporary databases as diff targets. `migrator` adds the ability to generate and run versioned migrations and to perform compaction.
+- Thank you [Rust](https://www.rust-lang.org/) for being so awesome! [clap](https://github.com/clap-rs/clap) and [rust-postgres](https://github.com/sfackler/rust-postgres) in particular made this way easier.
+
 # Contributing
 
 Pull requests making the script more ergonomic or robust are welcome.
