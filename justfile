@@ -34,6 +34,7 @@ release SEMVER_PORTION: _status_clean test build integration_test
 
 	git commit -am $GIT_VERSION
 	git tag $GIT_VERSION
+	docker tag blainehansen/migrator blainehansen/migrator:$VERSION
 	docker push blainehansen/migrator:$VERSION
 	docker push blainehansen/migrator:latest
 
