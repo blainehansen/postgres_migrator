@@ -71,6 +71,7 @@ integration_test: test build
 	}
 
 	assert_migration_count () {
+		sleep 0.5
 		MIGRATION_COUNT=$(ls ./migrations -al | wc -l)
 		MIGRATION_COUNT="$((MIGRATION_COUNT - 3))"
 		assert "$MIGRATION_COUNT -eq $1" $2
