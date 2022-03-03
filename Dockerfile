@@ -1,10 +1,21 @@
-FROM python:3
+FROM rust:latest as builder
+WORKDIR /usr/src/
+RUN rustup target add x86_64-unknown-linux-musl
 
-RUN pip3 install migra~=3.0.0 psycopg2-binary~=2.9.3
+RUN USER=root cargo new migrator
+WORKDIR /usr/src/migrator
+COPY Cargo.toml Cargo.lock ./
+RUN cargo build --release
+
+COPY src ./src
+RUN cargo install --target x86_64-unknown-linux-musl --path .
+
+
+FROM python:alpine
+RUN pip install migra~=3.0.0 psycopg2-binary~=2.9.3
+
+COPY --from=builder /usr/local/cargo/bin/migrator /usr/bin/
 
 WORKDIR /working
 
-# ENTRYPOINT ["./migrator_binary"]
-
-
-# the real docker image will be a multi-stage build
+ENTRYPOINT ["/usr/bin/migrator"]

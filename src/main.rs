@@ -312,8 +312,13 @@ impl TempDb {
 impl Drop for TempDb {
 	fn drop(&mut self) {
 		let dbname = &self.dbname;
-		let mut client = self.config.dbname("template1").connect(postgres::NoTls).unwrap();
-		client.batch_execute(&format!("drop database if exists {dbname}")).unwrap();
+
+		let _ = self.config.dbname("template1").connect(postgres::NoTls)
+			.map_err(|err| { eprintln!("unable to drop {dbname}: {err}"); err })
+			.and_then(|mut client| {
+				client.batch_execute(&format!("drop database if exists {dbname}"))
+			})
+			.map_err(|err| { eprintln!("unable to drop {dbname}: {err}"); err });
 	}
 }
 
