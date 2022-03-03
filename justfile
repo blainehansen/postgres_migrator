@@ -71,7 +71,7 @@ integration_test: test build
 	}
 
 	assert_migration_count () {
-		sleep 0.5
+		sleep 1
 		MIGRATION_COUNT=$(ls ./migrations -al | wc -l)
 		MIGRATION_COUNT="$((MIGRATION_COUNT - 3))"
 		assert "$MIGRATION_COUNT -eq $1" $2
@@ -81,6 +81,7 @@ integration_test: test build
 	PG_URL='postgres://experiment_user:asdf@localhost:5432/experiment_db?sslmode=disable'
 
 	rm -f ./migrations/*
+	mkdir -p migrations
 	psql $PG_URL -c "drop schema public cascade; create schema public; grant all on schema public to public; comment on schema public is 'standard public schema'"
 
 	DIFF=$(migrator --dbname "experiment_db" --user "experiment_user" --password "asdf" --schema-directory schemas/schema.1 diff database schema)
