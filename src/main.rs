@@ -116,24 +116,24 @@ fn to_connection_string(config: &Config) -> String {
 #[test]
 fn test_to_connection_string() {
 	let mut config = Config::new();
-	assert_eq!(to_connection_string(&config), "postgresql:://localhost:5432/");
+	assert_eq!(to_connection_string(&config), "postgresql://localhost:5432/");
 
 	config.dbname("template1");
 	config.host("db");
 	config.port(1111);
-	assert_eq!(to_connection_string(&config), "postgresql:://db:1111/template1");
+	assert_eq!(to_connection_string(&config), "postgresql://db:1111/template1");
 
 	config.user("user");
-	assert_eq!(to_connection_string(&config), "postgresql:://user@db:1111/template1");
+	assert_eq!(to_connection_string(&config), "postgresql://user@db:1111/template1");
 
 	config.password("password");
-	assert_eq!(to_connection_string(&config), "postgresql:://user:password@db:1111/template1");
+	assert_eq!(to_connection_string(&config), "postgresql://user:password@db:1111/template1");
 
 	let mut config = Config::new();
 	config.password("password");
 	config.dbname("template1");
 	config.port(1111);
-	assert_eq!(to_connection_string(&config), "postgresql:://localhost:1111/template1");
+	assert_eq!(to_connection_string(&config), "postgresql://localhost:1111/template1");
 }
 
 

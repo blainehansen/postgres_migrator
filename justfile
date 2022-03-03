@@ -41,7 +41,7 @@ release SEMVER_PORTION: _status_clean test build integration_test
 	git push origin main --tags
 
 
-integration_test: build
+integration_test: test build
 	#!/usr/bin/env bash
 	set -euo pipefail
 
