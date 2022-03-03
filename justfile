@@ -10,7 +10,6 @@ build:
 test:
 	cargo test
 
-# release: test build integration_test
 _status_clean:
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -20,23 +19,26 @@ _status_clean:
 		exit 1
 	fi
 
-# release: _status_clean
-release:
+release SEMVER_PORTION: _status_clean test build integration_test
 	#!/usr/bin/env bash
 	set -euo pipefail
+
+	cargo bump {{SEMVER_PORTION}}
 
 	VERSION=$(grep '^version = "' Cargo.toml)
 	[[ $VERSION =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]
 	VERSION="${BASH_REMATCH[1]}"
 	echo $VERSION
+	GIT_VERSION="v$VERSION"
+	echo $GIT_VERSION
 
-	# git commit -am $VERSION
-	# git tag $VERSION
-	# docker push blainehansen/migrator:$(VERSION)
-	# docker push blainehansen/migrator:latest
+	git commit -am $GIT_VERSION
+	git tag $GIT_VERSION
+	docker push blainehansen/migrator:$(VERSION)
+	docker push blainehansen/migrator:latest
 
-	# git push origin main
-	# git push origin main --tags
+	git push origin main
+	git push origin main --tags
 
 
 integration_test: build
