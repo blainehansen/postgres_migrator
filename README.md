@@ -25,44 +25,50 @@ To make this easier to manage, you can package that command in a function or ali
 
 ```bash
 function migrator {
-  local result=$(docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working blainehansen/migrator "$@")
+  local result=$(docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v -e PG_URL=$PG_URL $(pwd):/working blainehansen/migrator "$@")
   echo $result
 }
 
 # or
-alias migrator="docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working blainehansen/migrator"
+alias migrator="docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v -e PG_URL=$PG_URL $(pwd):/working blainehansen/migrator"
 
 
 # now you can call it more cleanly
-migrator --dbname "experiment_db" --user "experiment_user" migrate 'adding users table'
-migrator --dbname "experiment_db" --user "experiment_user" up
+migrator migrate 'adding users table'
+migrator up
 ```
 
 Here's the cli usage:
 
 ```
 USAGE:
-    migrator [OPTIONS] <SUBCOMMAND>
+    migrator [OPTIONS] --pg-url <PG_URL> <SUBCOMMAND>
 
 OPTIONS:
-        --dbname <DBNAME>
-        --host <HOST>                                    [default: localhost]
-        --password <PASSWORD>
-        --port <PORT>                                    [default: 5432]
-        --user <USER>
-        --migrations-directory <MIGRATIONS_DIRECTORY>    [default: migrations]
-        --schema-directory <SCHEMA_DIRECTORY>            [default: schema]
-    -h, --help                                           Print help information
-    -V, --version                                        Print version information
+    -h, --help
+            Print help information
+
+    -V, --version
+            Print version information
+
+        --pg-url <PG_URL>
+            postgres connection string, in the form postgres://user:password@host:port/database can
+            also be loaded from the environment variable PG_URL [env: PG_URL=]
+
+        --migrations-directory <MIGRATIONS_DIRECTORY>
+            directory where migrations are stored [default: migrations]
+
+        --schema-directory <SCHEMA_DIRECTORY>
+            directory where the declarative schema is located [default: schema]
 
 SUBCOMMANDS:
     help       Print this message or the help of the given subcommand(s)
-    migrate    generate new migration and place in migrations folder
     up         apply all migrations to database
+    migrate    generate new migration and place in migrations folder
     diff       prints out the sql diff necessary to convert `source` to `target`
-    compact    ensure both database and migrations folder are current with schema, and compact
-               to only one migration
     clean      cleans the current instance of all temporary databases
+    compact    ensure both database and migrations folder are current with schema and compact to
+               only one migration
 ```
 
 <!-- The script can:

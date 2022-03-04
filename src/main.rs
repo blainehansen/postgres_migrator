@@ -137,6 +137,42 @@ fn test_to_connection_string() {
 }
 
 
+fn config_try_from_str(pg_url: &str) -> std::result::Result<Config, postgres::Error> {
+	pg_url.parse::<Config>()
+}
+
+#[test]
+fn test_config_try_from_str() {
+	assert!(config_try_from_str("yoyoyo").is_err());
+
+	assert_eq!(
+		to_connection_string(&config_try_from_str("postgresql://localhost:5432/").unwrap()),
+		to_connection_string(Config::new().host("localhost").port(5432)),
+	);
+
+	assert_eq!(
+		to_connection_string(&config_try_from_str("postgresql://db:1111/template1").unwrap()),
+		to_connection_string(Config::new().host("db").port(1111).dbname("template1")),
+	);
+
+	assert_eq!(
+		to_connection_string(&config_try_from_str("postgresql://user@db:1111/template1").unwrap()),
+		to_connection_string(Config::new().user("user").host("db").port(1111).dbname("template1")),
+	);
+
+	assert_eq!(
+		to_connection_string(&config_try_from_str("postgresql://user:password@db:1111/template1").unwrap()),
+		to_connection_string(Config::new().user("user").password("password").host("db").port(1111).dbname("template1")),
+	);
+
+	assert_eq!(
+		to_connection_string(&config_try_from_str("postgresql://localhost:1111/template1").unwrap()),
+		to_connection_string(Config::new().host("localhost").port(1111).dbname("template1")),
+	);
+}
+
+
+
 fn compute_diff(source: &Config, target: &Config) -> Result<String> {
 	let output = std::process::Command::new("migra")
 		.arg("--unsafe")
@@ -165,14 +201,14 @@ fn apply_sql_files(config: &Config, directory: &str) -> Result<()> {
 }
 
 
-fn command_migrate(args: &Args, base_config: &Config, raw_description: &str) -> Result<String> {
-	let dbname = args.dbname.as_ref().ok_or(anyhow!("need a dbname to run migrate command"))?;
+fn command_migrate(args: &Args, raw_description: &str) -> Result<String> {
+	let dbname = args.pg_url.get_dbname().ok_or(anyhow!("need a dbname to run migrate command"))?;
 	let description_slug = make_slug(raw_description);
 	let version = create_timestamp();
 
-	let source = TempDb::new(&dbname, "migrations", &base_config)?;
+	let source = TempDb::new(&dbname, "migrations", &args.pg_url)?;
 	apply_sql_files(&source.config, &args.migrations_directory)?;
-	let target = TempDb::new(&dbname, "schema", &base_config)?;
+	let target = TempDb::new(&dbname, "schema", &args.pg_url)?;
 	apply_sql_files(&target.config, &args.schema_directory)?;
 
 	let migration_up = compute_diff(&source.config, &target.config)?;
@@ -185,14 +221,14 @@ fn command_migrate(args: &Args, base_config: &Config, raw_description: &str) -> 
 }
 
 
-fn command_compact(args: &Args, base_config: &Config) -> Result<()> {
-	let mut client = base_config.connect(postgres::NoTls)?;
-	command_migrate(args, base_config, "ensuring_current")?;
+fn command_compact(args: &Args) -> Result<()> {
+	let mut client = args.pg_url.connect(postgres::NoTls)?;
+	command_migrate(args, "ensuring_current")?;
 	command_up(args, &mut client)?;
 
 	purge_migrations_directory(&args.migrations_directory)?;
 	ensure_migrations_directory(&args.migrations_directory)?;
-	let version = command_migrate(args, base_config, "compacted_initial")?;
+	let version = command_migrate(args, "compacted_initial")?;
 	println!("new version number is: {version}");
 
 	client.batch_execute(&format!("truncate table _schema_versions; insert into _schema_versions (version) values ({version})"))?;
@@ -270,14 +306,14 @@ fn ensure_db(args: &Args, dbname: &str, base_config: &Config, backend: Backend) 
 	}
 }
 
-fn command_diff(args: &Args, base_config: &Config, source: Backend, target: Backend) -> Result<()> {
+fn command_diff(args: &Args, source: Backend, target: Backend) -> Result<()> {
 	if source == target {
 		return Err(anyhow!("can't diff {:?} against itself", source))
 	}
 
-	let dbname = args.dbname.as_ref().ok_or(anyhow!("need a dbname to run migrate command"))?;
-	let source = ensure_db(args, dbname, base_config, source)?;
-	let target = ensure_db(args, dbname, base_config, target)?;
+	let dbname = args.pg_url.get_dbname().ok_or(anyhow!("need a dbname to run migrate command"))?;
+	let source = ensure_db(args, dbname, &args.pg_url, source)?;
+	let target = ensure_db(args, dbname, &args.pg_url, target)?;
 
 	let diff = compute_diff(&source.1, &target.1)?;
 	println!("{diff}");
@@ -327,19 +363,15 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[clap(author, version)]
 struct Args {
-	#[clap(long)]
-	user: Option<String>,
-	#[clap(long)]
-	password: Option<String>,
-	#[clap(long, default_value_t = String::from("localhost"))]
-	host: String,
-	#[clap(long, default_value_t = 5432)]
-	port: u16,
-	#[clap(long)]
-	dbname: Option<String>,
+	/// postgres connection string, in the form postgres://user:password@host:port/database
+	/// can also be loaded from the environment variable PG_URL
+	#[clap(long, env = "PG_URL", parse(try_from_str = config_try_from_str))]
+	pg_url: Config,
 
+	/// directory where the declarative schema is located
 	#[clap(long, default_value_t = String::from(DEFAULT_SCHEMA_DIRECTORY))]
 	schema_directory: String,
+	/// directory where migrations are stored
 	#[clap(long, default_value_t = String::from(DEFAULT_MIGRATIONS_DIRECTORY))]
 	migrations_directory: String,
 
@@ -354,7 +386,8 @@ enum Command {
 
 	/// apply all migrations to database
 	Up,
-	/// ensure both database and migrations folder are current with schema, and compact to only one migration
+	/// ensure both database and migrations folder are current with schema
+	/// and compact to only one migration
 	Compact,
 	/// generate new migration and place in migrations folder
 	Migrate {
@@ -382,34 +415,23 @@ enum Backend {
 
 fn main() -> Result<()> {
 	let args = Args::parse();
-	let base_config = {
-		let mut base_config = Config::new();
-		if let Some(ref user) = args.user { base_config.user(&user); }
-		if let Some(ref password) = args.password { base_config.password(&password); }
-		if let Some(ref dbname) = args.dbname { base_config.dbname(&dbname); }
-		base_config
-			.host(&args.host)
-			.port(args.port)
-			.ssl_mode(postgres::config::SslMode::Disable);
-		base_config
-	};
 
 	match args.command {
 		Command::Migrate{ref migration_description} => {
-			command_migrate(&args, &base_config, &migration_description)?;
+			command_migrate(&args, &migration_description)?;
 		},
 		Command::Up => {
-			let mut client = base_config.connect(postgres::NoTls)?;
+			let mut client = args.pg_url.connect(postgres::NoTls)?;
 			command_up(&args, &mut client)?;
 		},
 		Command::Clean => {
-			command_clean(base_config)?;
+			command_clean(args.pg_url)?;
 		},
 		Command::Compact => {
-			command_compact(&args, &base_config)?;
+			command_compact(&args)?;
 		},
 		Command::Diff{source, target} => {
-			command_diff(&args, &base_config, source, target)?;
+			command_diff(&args, source, target)?;
 		},
 	}
 
