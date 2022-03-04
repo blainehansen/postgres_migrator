@@ -52,8 +52,8 @@ OPTIONS:
             Print version information
 
         --pg-url <PG_URL>
-            postgres connection string, in the form postgres://user:password@host:port/database can
-            also be loaded from the environment variable PG_URL [env: PG_URL=]
+            postgres connection string, in the form postgres://user:password@host:port/database
+            can also be loaded from the environment variable PG_URL [env: PG_URL=]
 
         --migrations-directory <MIGRATIONS_DIRECTORY>
             directory where migrations are stored [default: migrations]
