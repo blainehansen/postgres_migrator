@@ -78,7 +78,7 @@ integration_test: test build
 		assert "$MIGRATION_COUNT -eq $1" $2
 	}
 
-	# PGPASSWORD="asdf" psql -U experiment_user -h localhost experiment_db -c "select 1 as one"
+	# PGPASSWORD="asdf" psql -U experiment_user -h localhost experiment_db -f sql.local.sql
 	rm -f ./migrations/*
 	mkdir -p migrations
 	psql $PG_URL -c "drop schema public cascade; create schema public; grant all on schema public to public; comment on schema public is 'standard public schema'"

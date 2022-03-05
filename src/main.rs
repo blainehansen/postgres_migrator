@@ -172,6 +172,37 @@ fn test_config_try_from_str() {
 }
 
 
+fn check_versions(versions: Vec<(&str, Option<&str>, String)>) -> std::result::Result<(), VersionsError> {
+	for (index, (current_version, previous_version, _)) in versions {
+		match previous_version {
+			Some(previous_version) => {
+				//
+			},
+			None => index != 0,
+		}
+
+		if  && previous_version.is_none() {
+			return Err(VersionsError::UnexpectedNull(index, current_version))
+		}
+
+
+	}
+
+	Ok(())
+}
+
+
+fn ensure_schema_versions_table(client: &mut postgres::Client) -> std::result::Result<(), postgres::Error> {
+	client.batch_execute("
+		create table if not exists _schema_versions (
+			current_version char(14) not null unique,
+			previous_version char(14) references _schema_versions(current_version) unique,
+			check (current_version > previous_version)
+		);
+		create unique index if not exists i_schema_versions on _schema_versions ((previous_version is null)) where previous_version is null
+	")
+}
+
 
 fn compute_diff(source: &Config, target: &Config) -> Result<String> {
 	let output = std::process::Command::new("migra")
@@ -202,9 +233,13 @@ fn apply_sql_files(config: &Config, directory: &str) -> Result<()> {
 
 
 fn command_migrate(args: &Args, raw_description: &str) -> Result<String> {
+	let mut client = args.pg_url.connect(postgres::NoTls)?;
+	ensure_schema_versions_table(&mut client)?;
+
 	let dbname = args.pg_url.get_dbname().ok_or(anyhow!("need a dbname to run migrate command"))?;
+	let previous_version = get_current_version(&mut client)?.unwrap_or("null".to_string());
 	let description_slug = make_slug(raw_description);
-	let version = create_timestamp();
+	let current_version = create_timestamp();
 
 	let source = TempDb::new(&dbname, "migrations", &args.pg_url)?;
 	apply_sql_files(&source.config, &args.migrations_directory)?;
@@ -214,10 +249,10 @@ fn command_migrate(args: &Args, raw_description: &str) -> Result<String> {
 	let migration_up = compute_diff(&source.config, &target.config)?;
 
 	ensure_migrations_directory(&args.migrations_directory)?;
-	fs::File::create(format!("./{}/{version}.{description_slug}.sql", args.migrations_directory))?
+	fs::File::create(format!("./{}/{current_version}.{previous_version}.{description_slug}.sql", args.migrations_directory))?
 		.write_all(migration_up.as_bytes())?;
 
-	Ok(version)
+	Ok(current_version)
 }
 
 
@@ -228,41 +263,66 @@ fn command_compact(args: &Args) -> Result<()> {
 
 	purge_migrations_directory(&args.migrations_directory)?;
 	ensure_migrations_directory(&args.migrations_directory)?;
-	let version = command_migrate(args, "compacted_initial")?;
-	println!("new version number is: {version}");
+	let current_version = command_migrate(args, "compacted_initial")?;
+	println!("new version number is: {current_version}");
 
-	client.batch_execute(&format!("truncate table _schema_versions; insert into _schema_versions (version) values ({version})"))?;
+	client.batch_execute(&format!("
+		truncate table _schema_versions;
+		insert into _schema_versions (current_version, previous_version) values ({current_version}, null)
+	"))?;
 	Ok(())
 }
 
 
-fn command_up(args: &Args, client: &mut postgres::Client) -> Result<()> {
-	client.batch_execute("create table if not exists _schema_versions (version char(14) unique not null)")?;
+fn get_current_version(client: &mut postgres::Client) -> Result<Option<String>> {
+	let current_version = client
+		.query_one("select max(current_version) as current_version from _schema_versions", &[])?
+		.get("current_version");
 
-	let current_version: Option<String> = client
-		.query_one("select max(version) as current from _schema_versions", &[])?
-		.get("current");
+	Ok(current_version)
+}
+
+
+fn parse_migration_file(migration_file: &PathBuf) -> Result<(&str, &str)> {
+	migration_file.file_name()
+		.and_then(|name| name.to_str())
+		.and_then(|name| {
+			let mut portions = name.split(".");
+			let current_version = portions.next()?;
+			let previous_version = portions.next()?;
+			if previous_version != "null" && current_version <= previous_version {
+				return None
+			}
+			Some((current_version, previous_version))
+		})
+		.ok_or(anyhow!("not formatted correctly: {:?}", migration_file.to_string_lossy()))
+}
+
+
+fn command_up(args: &Args, client: &mut postgres::Client) -> Result<()> {
+	ensure_schema_versions_table(client)?;
+
+	let actual_version = get_current_version(client)?;
 
 	ensure_migrations_directory(&args.migrations_directory)?;
 	for migration_file in list_sql_files(&args.migrations_directory)? {
-		let version = migration_file.file_name()
-			.and_then(|name| name.to_str())
-			.and_then(|name| name.split(".").nth(0))
-			.ok_or(anyhow!("unable to determine version: {:?}", migration_file))?;
-		let migration_file = migration_file.to_str().ok_or(anyhow!("not valid unicode: {:?}", migration_file))?;
+		let (current_version, previous_version) = parse_migration_file(&migration_file)?;
 		let mut perform_migration = || -> Result<()> {
-			println!("performing {:?}", migration_file);
-			let mut file = fs::File::open(migration_file)?;
+			println!("performing {:?}", migration_file.to_string_lossy());
+			let mut file = fs::File::open(&migration_file)?;
 			let mut migration_query = String::new();
 			file.read_to_string(&mut migration_query)?;
 
-			client.batch_execute(&format!("{migration_query}; INSERT into _schema_versions (version) values ({version})"))?;
+			client.batch_execute(&format!("
+				{migration_query};
+				insert into _schema_versions (current_version, previous_version) values ({current_version}, {previous_version})
+			"))?;
 			Ok(())
 		};
 
-		match current_version {
+		match actual_version {
 			None => perform_migration()?,
-			Some(ref current_version) if version > current_version.as_str() => perform_migration()?,
+			Some(ref actual_version) if current_version > actual_version.as_str() => perform_migration()?,
 			_ => println!("not performing {:?}", migration_file),
 		}
 	}
