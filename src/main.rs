@@ -1,7 +1,7 @@
 use std::{io::{self, Read, Write}, fs, path::PathBuf};
 use chrono::Utc;
 use postgres::Config;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Result, Context};
 
 fn create_timestamp() -> String {
 	Utc::now().format("%Y%m%d%H%M%S").to_string()
@@ -12,6 +12,9 @@ fn test_create_timestamp() {
 	assert_eq!(create_timestamp().len(), 14);
 }
 
+fn get_null_string() -> String {
+	"null".to_string()
+}
 
 fn ensure_migrations_directory(migrations_directory: &str) -> io::Result<()> {
 	fs::create_dir_all(migrations_directory)
@@ -97,6 +100,114 @@ fn test_list_sql_files() -> io::Result<()> {
 }
 
 
+#[derive(Debug, Eq, PartialEq)]
+struct MigrationFile {
+	file_path: PathBuf,
+	display_file_path: String,
+	current_version: String,
+	previous_version: String,
+}
+
+impl MigrationFile {
+	/// file_paths is expected to be sorted alphanumerically
+	fn vec_from_paths(file_paths: Vec<PathBuf>) -> Result<Vec<MigrationFile>> {
+		let mut migration_files = vec![];
+		let mut last_seen_current_version = get_null_string();
+
+		for (index, file_path) in file_paths.into_iter().enumerate() {
+			let display_file_path = file_path.to_string_lossy().to_string();
+
+			// first parse the file_name and version strings
+			let file_name = file_path.file_name().ok_or_else(|| anyhow!("no file name forst this path: {display_file_path}"))?;
+			let file_name = file_name.to_str().ok_or_else(|| anyhow!("file name isn't valid unicode: {display_file_path}"))?;
+			let mut portions = file_name.split(".");
+			let current_version = portions.next()
+				.ok_or_else(|| anyhow!("no version strings in this path: {display_file_path}"))?.to_string();
+			let previous_version = portions.next()
+				.ok_or_else(|| anyhow!("no previous version string in this path: {display_file_path}"))?.to_string();
+
+			// then check that the version strings align with the previous one
+			if previous_version != last_seen_current_version {
+				return Err(anyhow!("misaligned versions in {display_file_path}: expected {last_seen_current_version}, got {previous_version}"));
+			}
+			last_seen_current_version = current_version.clone();
+
+			let validate_version_string = |version_string: String| {
+				match version_string.len() {
+					14 => Ok(version_string),
+					_ => Err(anyhow!("{version_string} is supposed to have exactly 14 characters")),
+				}
+			};
+			let current_version = validate_version_string(current_version)?;
+			let previous_version = match previous_version == "null" {
+				true => {
+					// check that nulls are only allowed in the first spot
+					if !(index == 0) {
+						return Err(anyhow!("null previous_version in migration that isn't the first: {display_file_path}"));
+					}
+					previous_version
+				},
+				false => {
+					let previous_version = previous_version;
+					if !(current_version > previous_version) {
+						return Err(anyhow!("all migration versions have to be sequential, so {current_version} must be greater than {previous_version}"));
+					}
+					validate_version_string(previous_version)?
+				}
+			};
+
+			migration_files.push(MigrationFile{file_path, display_file_path, current_version, previous_version});
+		}
+
+		Ok(migration_files)
+	}
+}
+
+#[test]
+fn test_migration_files_vec_from_paths() {
+	let ex = |file_path: PathBuf, current_version: &str, previous_version: &str| {
+		let display_file_path = file_path.to_string_lossy().to_string();
+		MigrationFile{file_path, display_file_path, current_version: current_version.to_string(), previous_version: previous_version.to_string()}
+	};
+	let version = create_timestamp();
+
+	assert!(MigrationFile::vec_from_paths(vec![PathBuf::from("err/short.sql")]).is_err());
+	assert!(MigrationFile::vec_from_paths(vec![PathBuf::from("err/short.short.sql")]).is_err());
+	assert!(MigrationFile::vec_from_paths(vec![PathBuf::from(format!("err/{version}.{version}.sql"))]).is_err());
+	assert!(MigrationFile::vec_from_paths(vec![PathBuf::from(format!("err/null.{version}.sql"))]).is_err());
+	assert!(MigrationFile::vec_from_paths(vec![
+		PathBuf::from(format!("err/{version}.null.sql")),
+		PathBuf::from(format!("err/90000000000000.null.sql")),
+	]).is_err());
+	assert!(MigrationFile::vec_from_paths(vec![
+		PathBuf::from(format!("err/{version}.null.sql")),
+		PathBuf::from(format!("err/null.{version}.sql")),
+	]).is_err());
+
+	assert_eq!(MigrationFile::vec_from_paths(vec![]).unwrap(), vec![]);
+
+	let file_path = PathBuf::from(format!("ok/{version}.null.sql"));
+	assert_eq!(
+		MigrationFile::vec_from_paths(vec![file_path.clone()]).unwrap(),
+		vec![ex(file_path, &version, "null")],
+	);
+
+	let file_path1 = PathBuf::from(format!("ok/{version}.null.sql"));
+	let file_path2 = PathBuf::from(format!("ok/90000000000000.{version}.sql"));
+	let file_path3 = PathBuf::from(format!("ok/90000000000001.90000000000000.sql"));
+	let file_path4 = PathBuf::from(format!("ok/90000000000002.90000000000001.sql"));
+	assert_eq!(
+		MigrationFile::vec_from_paths(vec![file_path1.clone(), file_path2.clone(), file_path3.clone(), file_path4.clone()]).unwrap(),
+		vec![
+			ex(file_path1, &version, "null"),
+			ex(file_path2, "90000000000000", &version),
+			ex(file_path3, "90000000000001", "90000000000000"),
+			ex(file_path4, "90000000000002", "90000000000001"),
+		],
+	);
+}
+
+
 fn to_connection_string(config: &Config) -> String {
 	let user_string = match (config.get_user(), config.get_password()) {
 		(None, None) | (None, Some(_)) => "".to_string(),
@@ -172,27 +283,7 @@ fn test_config_try_from_str() {
 }
 
 
-fn check_versions(versions: Vec<(&str, Option<&str>, String)>) -> std::result::Result<(), VersionsError> {
-	for (index, (current_version, previous_version, _)) in versions {
-		match previous_version {
-			Some(previous_version) => {
-				//
-			},
-			None => index != 0,
-		}
-
-		if  && previous_version.is_none() {
-			return Err(VersionsError::UnexpectedNull(index, current_version))
-		}
-
-
-	}
-
-	Ok(())
-}
-
-
-fn ensure_schema_versions_table(client: &mut postgres::Client) -> std::result::Result<(), postgres::Error> {
+fn gather_validated_migrations(args: &Args, client: &mut postgres::Client) -> Result<(Vec<MigrationFile>, Option<String>)> {
 	client.batch_execute("
 		create table if not exists _schema_versions (
 			current_version char(14) not null unique,
@@ -200,7 +291,14 @@ fn ensure_schema_versions_table(client: &mut postgres::Client) -> std::result::R
 			check (current_version > previous_version)
 		);
 		create unique index if not exists i_schema_versions on _schema_versions ((previous_version is null)) where previous_version is null
-	")
+	")?;
+
+	ensure_migrations_directory(&args.migrations_directory)?;
+	let migration_files = MigrationFile::vec_from_paths(list_sql_files(&args.migrations_directory)?)?;
+
+	let current_version = migration_files.last().map(|migration_file| migration_file.current_version.clone());
+
+	Ok((migration_files, current_version))
 }
 
 
@@ -210,7 +308,8 @@ fn compute_diff(source: &Config, target: &Config) -> Result<String> {
 		.arg("--with-privileges")
 		.arg(to_connection_string(source))
 		.arg(to_connection_string(target))
-		.output()?;
+		.output()
+		.context("Error while calling migra")?;
 
 	if output.stderr.len() != 0 {
 		return Err(anyhow!("migra failed: {}\n\n{}", output.status, String::from_utf8_lossy(&output.stderr)));
@@ -219,9 +318,9 @@ fn compute_diff(source: &Config, target: &Config) -> Result<String> {
 }
 
 
-fn apply_sql_files(config: &Config, directory: &str) -> Result<()> {
+fn apply_sql_files(config: &Config, sql_files: Vec<PathBuf>) -> Result<()> {
 	let mut client = config.connect(postgres::NoTls)?;
-	for sql_file in list_sql_files(directory)? {
+	for sql_file in sql_files {
 		let mut file = fs::File::open(sql_file)?;
 		let mut query = String::new();
 		file.read_to_string(&mut query)?;
@@ -234,21 +333,20 @@ fn apply_sql_files(config: &Config, directory: &str) -> Result<()> {
 
 fn command_migrate(args: &Args, raw_description: &str) -> Result<String> {
 	let mut client = args.pg_url.connect(postgres::NoTls)?;
-	ensure_schema_versions_table(&mut client)?;
-
 	let dbname = args.pg_url.get_dbname().ok_or(anyhow!("need a dbname to run migrate command"))?;
-	let previous_version = get_current_version(&mut client)?.unwrap_or("null".to_string());
+	let (migration_files, previous_version) = gather_validated_migrations(&args, &mut client)?;
+	let previous_version = previous_version.unwrap_or_else(get_null_string);
+
 	let description_slug = make_slug(raw_description);
 	let current_version = create_timestamp();
 
 	let source = TempDb::new(&dbname, "migrations", &args.pg_url)?;
-	apply_sql_files(&source.config, &args.migrations_directory)?;
+	apply_sql_files(&source.config, migration_files.into_iter().map(|migration_file| migration_file.file_path).collect())?;
 	let target = TempDb::new(&dbname, "schema", &args.pg_url)?;
-	apply_sql_files(&target.config, &args.schema_directory)?;
+	apply_sql_files(&target.config, list_sql_files(&args.schema_directory)?)?;
 
 	let migration_up = compute_diff(&source.config, &target.config)?;
 
-	ensure_migrations_directory(&args.migrations_directory)?;
 	fs::File::create(format!("./{}/{current_version}.{previous_version}.{description_slug}.sql", args.migrations_directory))?
 		.write_all(migration_up.as_bytes())?;
 
@@ -274,42 +372,17 @@ fn command_compact(args: &Args) -> Result<()> {
 }
 
 
-fn get_current_version(client: &mut postgres::Client) -> Result<Option<String>> {
-	let current_version = client
+fn command_up(args: &Args, client: &mut postgres::Client) -> Result<()> {
+	let migration_files = gather_validated_migrations(&args, client)?.0;
+
+	let actual_version: Option<String> = client
 		.query_one("select max(current_version) as current_version from _schema_versions", &[])?
 		.get("current_version");
 
-	Ok(current_version)
-}
-
-
-fn parse_migration_file(migration_file: &PathBuf) -> Result<(&str, &str)> {
-	migration_file.file_name()
-		.and_then(|name| name.to_str())
-		.and_then(|name| {
-			let mut portions = name.split(".");
-			let current_version = portions.next()?;
-			let previous_version = portions.next()?;
-			if previous_version != "null" && current_version <= previous_version {
-				return None
-			}
-			Some((current_version, previous_version))
-		})
-		.ok_or(anyhow!("not formatted correctly: {:?}", migration_file.to_string_lossy()))
-}
-
-
-fn command_up(args: &Args, client: &mut postgres::Client) -> Result<()> {
-	ensure_schema_versions_table(client)?;
-
-	let actual_version = get_current_version(client)?;
-
-	ensure_migrations_directory(&args.migrations_directory)?;
-	for migration_file in list_sql_files(&args.migrations_directory)? {
-		let (current_version, previous_version) = parse_migration_file(&migration_file)?;
+	for MigrationFile{display_file_path, file_path, current_version, previous_version} in migration_files {
 		let mut perform_migration = || -> Result<()> {
-			println!("performing {:?}", migration_file.to_string_lossy());
-			let mut file = fs::File::open(&migration_file)?;
+			println!("performing {}", display_file_path);
+			let mut file = fs::File::open(&file_path)?;
 			let mut migration_query = String::new();
 			file.read_to_string(&mut migration_query)?;
 
@@ -322,8 +395,8 @@ fn command_up(args: &Args, client: &mut postgres::Client) -> Result<()> {
 
 		match actual_version {
 			None => perform_migration()?,
-			Some(ref actual_version) if current_version > actual_version.as_str() => perform_migration()?,
-			_ => println!("not performing {:?}", migration_file),
+			Some(ref actual_version) if &current_version > actual_version => perform_migration()?,
+			_ => println!("not performing {}", display_file_path),
 		}
 	}
 
@@ -352,13 +425,13 @@ fn ensure_db(args: &Args, dbname: &str, base_config: &Config, backend: Backend) 
 	match backend {
 		Backend::Migrations => {
 			let temp = TempDb::new(dbname, "migrations", base_config)?;
-			apply_sql_files(&temp.config, &args.migrations_directory)?;
+			apply_sql_files(&temp.config, list_sql_files(&args.migrations_directory)?)?;
 			let config = temp.config.clone();
 			Ok((Some(temp), config))
 		},
 		Backend::Schema => {
 			let temp = TempDb::new(dbname, "schema", base_config)?;
-			apply_sql_files(&temp.config, &args.schema_directory)?;
+			apply_sql_files(&temp.config, list_sql_files(&args.schema_directory)?)?;
 			let config = temp.config.clone();
 			Ok((Some(temp), config))
 		},
