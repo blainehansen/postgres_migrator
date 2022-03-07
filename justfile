@@ -50,6 +50,7 @@ integration_test: test build
 	function migrator {
 		local result=$(docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working -e PG_URL=$PG_URL blainehansen/migrator "$@")
 		echo $result
+		return $?
 	}
 
 	assert () {

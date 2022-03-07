@@ -1,14 +1,20 @@
 # `migrator`
 
-`migrator` allows you to write your postgres schema directly in *declarative sql*, and to automatically generate migrations when you change that declarative schema.
+`migrator` allows you to write your postgres schema directly in *declarative sql*, to automatically generate migrations when you change that declarative schema, and to apply those migrations with rigorous version tracking and consistency checks.
 
 **No more orms!** Use the full power of postgres directly without having to manually write migrations.
 
-Turns out generating and running migrations isn't that hard! Especially if:
+`migrator` is able to:
 
-- You don't bother making migrations reversible, and instead just make a new migration if you want to undo something (that's best practice anyway).
-- You don't worry about only running migrations up to a certain version.
-- Schema diffing is taken care of by someone else! Thank you [`migra`](https://github.com/djrobstep/migra)!
+- Automatically generate raw sql migrations by diffing the sql in a migrations folder to that in a schema folder.
+- Apply those migrations and save migration version numbers in the database, so you can know what state a database is supposed to be in.
+- Run consistency checks on migrations, so that they are only ever applied in the order they were generated. This can prevent very painful debugging and database corruption.
+
+`migrator` intentionally doesn't do the following:
+
+- Create "down" versions of migrations. If you want to undo something in production, just make a new migration (that's best practice anyway). In dev just force the database into the right state.
+- Allow running migrations only up to a certain version, and instead always applies all migrations. If you don't want to apply some migrations, move them to a different folder or change their extension to something other than `.sql`.
+- Figure out database diffs itself, instead using the well-establised [`migra`](https://github.com/djrobstep/migra) under the hood.
 
 # Usage
 
@@ -21,17 +27,20 @@ First, place your declarative sql files in the `schema` directory and create a d
 docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working blainehansen/migrator <args>
 ```
 
-To make this easier to manage, you can package that command in a function or alias:
+To make this easier to manage, you can package that command in a function, alias, or script:
 
 ```bash
 function migrator {
   local result=$(docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v -e PG_URL=$PG_URL $(pwd):/working blainehansen/migrator "$@")
   echo $result
+  return $?
 }
 
 # or
 alias migrator="docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v -e PG_URL=$PG_URL $(pwd):/working blainehansen/migrator"
 
+# or in it's own executable file
+docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v -e PG_URL=$PG_URL $(pwd):/working blainehansen/migrator "$@"
 
 # now you can call it more cleanly
 migrator migrate 'adding users table'
@@ -71,12 +80,6 @@ SUBCOMMANDS:
                only one migration
 ```
 
-<!-- The script can:
-
-- Generate migrations in the format `$date_timestamp.$description.sql` into a `migrations` directory, using the `migrate <description>` subcommand.
-- Run all unperformed migrations and insert the version number of each into a `_schema_versions` table, using the `up` subcommand.
-- Compact all migrations into a single migration, using the `compact` subcommand. -->
-
 ## What is `compact`?
 
 Over time a migrations folder can get large and unwieldy, with possibly hundreds of migrations. This long log gets less and less useful over time, especially for small teams. The `compact` command replaces all migrations with a single migration that creates the entire schema at once.
@@ -95,7 +98,7 @@ create table fruit (
 );
 ```
 
-Then running `migrator migrate 'add fruit table'` will generate a migration called `$date_timestamp.add_fruit_table.sql` in the `migrations` folder.
+Then running `migrator migrate 'add fruit table'` will generate a migration called `$new_version.$previous_version.add_fruit_table.sql` in the `migrations` folder.
 
 If you then change your schema sql to this:
 
@@ -109,7 +112,7 @@ create table fruit (
 );
 ```
 
-Then running `migrator migrate 'remove color add flavor'` will generate `$date_timestamp.remove_color_add_flavor.sql` that will go from the previous state to the new state.
+Then running `migrator migrate 'remove color add flavor'` will generate `$new_version.$previous_version.remove_color_add_flavor.sql` that will go from the previous state to the new state.
 
 # Credits
 
