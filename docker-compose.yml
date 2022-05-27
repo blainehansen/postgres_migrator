@@ -1,5 +1,19 @@
 version: '3'
 services:
+  dev:
+    build:
+      context: .
+      dockerfile: dev.Dockerfile
+    image: migrator-dev
+    container_name: migrator-dev
+    depends_on:
+      - db
+    environment:
+      - PG_URL=postgres://experiment_user:asdf@db:5432/experiment_db?sslmode=disable
+    volumes:
+      - .:/usr/working/
+    command: tail -F anything
+
   db:
     image: postgres:alpine
     container_name: db

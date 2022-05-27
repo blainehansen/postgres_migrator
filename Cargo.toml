@@ -12,3 +12,7 @@ clap = { version = "*", features = ["derive", "env"] }
 
 [dev-dependencies]
 serial_test = "*"
+# https://docs.rs/assert_cmd/latest/assert_cmd/
+# assert_cmd = "*"
+# https://docs.rs/assert_fs/latest/assert_fs/
+# assert_fs = "*"

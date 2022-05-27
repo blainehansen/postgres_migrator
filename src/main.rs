@@ -314,7 +314,7 @@ fn compute_diff(source: &Config, target: &Config) -> Result<String> {
 	if output.stderr.len() != 0 {
 		return Err(anyhow!("migra failed: {}\n\n{}", output.status, String::from_utf8_lossy(&output.stderr)));
 	}
-	Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+	Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 
@@ -331,9 +331,9 @@ fn apply_sql_files(config: &Config, sql_files: Vec<PathBuf>) -> Result<()> {
 }
 
 
-fn command_migrate(args: &Args, raw_description: &str) -> Result<String> {
+fn command_generate(args: &Args, raw_description: &str) -> Result<String> {
 	let mut client = args.pg_url.connect(postgres::NoTls)?;
-	let dbname = args.pg_url.get_dbname().ok_or(anyhow!("need a dbname to run migrate command"))?;
+	let dbname = args.pg_url.get_dbname().ok_or(anyhow!("need a dbname to run generate command"))?;
 	let (migration_files, previous_version) = gather_validated_migrations(&args, &mut client)?;
 	let previous_version = previous_version.unwrap_or_else(get_null_string);
 
@@ -345,10 +345,10 @@ fn command_migrate(args: &Args, raw_description: &str) -> Result<String> {
 	let target = TempDb::new(&dbname, "schema", &args.pg_url)?;
 	apply_sql_files(&target.config, list_sql_files(&args.schema_directory)?)?;
 
-	let migration_up = compute_diff(&source.config, &target.config)?;
+	let generated_migration = compute_diff(&source.config, &target.config)?;
 
 	fs::File::create(format!("./{}/{current_version}.{previous_version}.{description_slug}.sql", args.migrations_directory))?
-		.write_all(migration_up.as_bytes())?;
+		.write_all(generated_migration.as_bytes())?;
 
 	Ok(current_version)
 }
@@ -356,12 +356,12 @@ fn command_migrate(args: &Args, raw_description: &str) -> Result<String> {
 
 fn command_compact(args: &Args) -> Result<()> {
 	let mut client = args.pg_url.connect(postgres::NoTls)?;
-	command_migrate(args, "ensuring_current")?;
-	command_up(args, &mut client)?;
+	command_generate(args, "ensuring_current")?;
+	command_migrate(args, &mut client)?;
 
 	purge_migrations_directory(&args.migrations_directory)?;
 	ensure_migrations_directory(&args.migrations_directory)?;
-	let current_version = command_migrate(args, "compacted_initial")?;
+	let current_version = command_generate(args, "compacted_initial")?;
 	println!("new version number is: {current_version}");
 
 	client.batch_execute(&format!("
@@ -372,7 +372,7 @@ fn command_compact(args: &Args) -> Result<()> {
 }
 
 
-fn command_up(args: &Args, client: &mut postgres::Client) -> Result<()> {
+fn command_migrate(args: &Args, client: &mut postgres::Client) -> Result<()> {
 	let migration_files = gather_validated_migrations(&args, client)?.0;
 
 	let actual_version: Option<String> = client
@@ -439,18 +439,28 @@ fn ensure_db(args: &Args, dbname: &str, base_config: &Config, backend: Backend) 
 	}
 }
 
-fn command_diff(args: &Args, source: Backend, target: Backend) -> Result<()> {
+fn compute_backend_diff(args: &Args, source: Backend, target: Backend) -> Result<String> {
 	if source == target {
 		return Err(anyhow!("can't diff {:?} against itself", source))
 	}
 
-	let dbname = args.pg_url.get_dbname().ok_or(anyhow!("need a dbname to run migrate command"))?;
+	let dbname = args.pg_url.get_dbname().ok_or(anyhow!("provided pg_url has no dbname"))?;
 	let source = ensure_db(args, dbname, &args.pg_url, source)?;
 	let target = ensure_db(args, dbname, &args.pg_url, target)?;
+	Ok(compute_diff(&source.1, &target.1)?)
+}
 
-	let diff = compute_diff(&source.1, &target.1)?;
+fn command_diff(args: &Args, source: Backend, target: Backend) -> Result<()> {
+	let diff = compute_backend_diff(&args, source, target)?;
 	println!("{diff}");
+	Ok(())
+}
 
+fn command_check(args: &Args, source: Backend, target: Backend) -> Result<()> {
+	let diff = compute_backend_diff(&args, source, target)?;
+	if !diff.is_empty() {
+		return Err(anyhow!("diff isn't empty:\n\n{diff}"))
+	}
 	Ok(())
 }
 
@@ -518,12 +528,12 @@ enum Command {
 	Clean,
 
 	/// apply all migrations to database
-	Up,
+	Migrate,
 	/// ensure both database and migrations folder are current with schema
 	/// and compact to only one migration
 	Compact,
 	/// generate new migration and place in migrations folder
-	Migrate {
+	Generate {
 		/// description of migration, will be converted to "snake_case"
 		migration_description: String,
 	},
@@ -535,7 +545,13 @@ enum Command {
 		target: Backend,
 	},
 
-	// Check,
+	/// checks that `source` and target are in sync, throws error otherwise
+	Check {
+		#[clap(arg_enum)]
+		source: Backend,
+		#[clap(arg_enum)]
+		target: Backend,
+	},
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ArgEnum)]
@@ -550,12 +566,12 @@ fn main() -> Result<()> {
 	let args = Args::parse();
 
 	match args.command {
-		Command::Migrate{ref migration_description} => {
-			command_migrate(&args, &migration_description)?;
+		Command::Generate{ref migration_description} => {
+			command_generate(&args, &migration_description)?;
 		},
-		Command::Up => {
+		Command::Migrate => {
 			let mut client = args.pg_url.connect(postgres::NoTls)?;
-			command_up(&args, &mut client)?;
+			command_migrate(&args, &mut client)?;
 		},
 		Command::Clean => {
 			command_clean(args.pg_url)?;
@@ -566,7 +582,81 @@ fn main() -> Result<()> {
 		Command::Diff{source, target} => {
 			command_diff(&args, source, target)?;
 		},
+		Command::Check{source, target} => {
+			command_check(&args, source, target)?;
+		},
 	}
+
+	Ok(())
+}
+
+#[test]
+#[serial_test::serial]
+#[ignore]
+fn test_full() -> Result<()> {
+	fn get_config() -> Config {
+		std::env::var("PG_URL").unwrap().parse::<Config>().unwrap()
+	}
+	fn get_args(schema_directory: &'static str) -> Args {
+		Args {
+			pg_url: get_config(),
+			schema_directory: schema_directory.to_string(),
+			migrations_directory: DEFAULT_MIGRATIONS_DIRECTORY.to_string(),
+			command: Command::Clean,
+		}
+	}
+
+	fn get_migration_count() -> usize {
+		list_sql_files(DEFAULT_MIGRATIONS_DIRECTORY).unwrap().len()
+	}
+
+	let mut client = get_config().connect(postgres::NoTls)?;
+	client.batch_execute("
+		drop schema public cascade;
+		create schema public;
+		grant all on schema public to public;
+		comment on schema public is 'standard public schema';
+	")?;
+	purge_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	ensure_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+
+	use Backend::*;
+	assert!(command_check(&get_args("schemas/schema.1"), Database, Migrations).is_ok());
+	assert!(command_check(&get_args("schemas/schema.1"), Schema, Migrations).is_err());
+	assert!(command_check(&get_args("schemas/schema.1"), Database, Schema).is_err());
+	assert!(!compute_backend_diff(&get_args("schemas/schema.1"), Database, Schema)?.is_empty());
+	assert!(compute_backend_diff(&get_args("schemas/schema.1"), Database, Migrations)?.is_empty());
+
+	// # schema.1
+	command_generate(&get_args("schemas/schema.1"), "one")?;
+	assert_eq!(get_migration_count(), 1);
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
+	client.batch_execute("select id, name, color from fruit")?;
+
+	// # schema.2
+	command_generate(&get_args("schemas/schema.2"), "two")?;
+	assert_eq!(get_migration_count(), 2);
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
+	client.batch_execute("select id, name, flavor from fruit")?;
+
+	// # schema.3
+	command_compact(&get_args("schemas/schema.3"))?;
+	assert_eq!(get_migration_count(), 1);
+	client.batch_execute("select person.name, fruit.name, flavor from person join fruit on person.favorite_fruit = fruit.id where flavor = 'SALTY'")?;
+
+	// # schema.1
+	command_generate(&get_args("schemas/schema.1"), "back to one")?;
+	assert_eq!(get_migration_count(), 2);
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
+	client.batch_execute("select id, name, color from fruit")?;
+
+	command_clean(get_config())?;
+	client.execute("create database garbage_tmp", &[])?;
+	client.batch_execute("comment on database garbage_tmp is 'TEMP DB CREATED BY migrator';")?;
+	command_clean(get_config())?;
+	// this is just a ghetto way to make sure `clean` actually removes garbage_tmp, since this command will fail otherwise
+	client.execute("create database garbage_tmp", &[])?;
+	client.execute("drop database garbage_tmp", &[])?;
 
 	Ok(())
 }
