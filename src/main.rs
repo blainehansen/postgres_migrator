@@ -545,7 +545,7 @@ enum Command {
 		target: Backend,
 	},
 
-	/// checks that `source` and target are in sync, throws error otherwise
+	/// checks that `source` and `target` are in sync, throws error otherwise
 	Check {
 		#[clap(arg_enum)]
 		source: Backend,

@@ -57,9 +57,6 @@ OPTIONS:
     -h, --help
             Print help information
 
-    -V, --version
-            Print version information
-
         --pg-url <PG_URL>
             postgres connection string, in the form postgres://user:password@host:port/database
             can also be loaded from the environment variable PG_URL [env: PG_URL=]
@@ -70,14 +67,18 @@ OPTIONS:
         --schema-directory <SCHEMA_DIRECTORY>
             directory where the declarative schema is located [default: schema]
 
+    -V, --version
+            Print version information
+
 SUBCOMMANDS:
-    help       Print this message or the help of the given subcommand(s)
-    migrate         apply all migrations to database
     generate    generate new migration and place in migrations folder
-    diff       prints out the sql diff necessary to convert `source` to `target`
-    clean      cleans the current instance of all temporary databases
-    compact    ensure both database and migrations folder are current with schema and compact to
-               only one migration
+    migrate     apply all migrations to database
+    check       checks that `source` and `target` are in sync, throws error otherwise
+    diff        prints out the sql diff necessary to convert `source` to `target`
+    compact     ensure both database and migrations folder are current with schema and compact
+                to only one migration
+    clean       cleans the current instance of all temporary databases
+    help        Print this message or the help of the given subcommand(s)
 ```
 
 ## What is `compact`?
