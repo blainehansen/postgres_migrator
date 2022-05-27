@@ -43,8 +43,8 @@ alias migrator="docker run --rm -it --network host -u $(id -u ${USER}):$(id -g $
 docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v -e PG_URL=$PG_URL $(pwd):/working blainehansen/migrator "$@"
 
 # now you can call it more cleanly
-migrator migrate 'adding users table'
-migrator up
+migrator generate 'adding users table'
+migrator migrate
 ```
 
 Here's the cli usage:
@@ -72,8 +72,8 @@ OPTIONS:
 
 SUBCOMMANDS:
     help       Print this message or the help of the given subcommand(s)
-    up         apply all migrations to database
-    migrate    generate new migration and place in migrations folder
+    migrate         apply all migrations to database
+    generate    generate new migration and place in migrations folder
     diff       prints out the sql diff necessary to convert `source` to `target`
     clean      cleans the current instance of all temporary databases
     compact    ensure both database and migrations folder are current with schema and compact to
