@@ -386,10 +386,13 @@ fn command_migrate(args: &Args, client: &mut postgres::Client) -> Result<()> {
 			let mut migration_query = String::new();
 			file.read_to_string(&mut migration_query)?;
 
-			client.batch_execute(&format!("
-				{migration_query};
+			let mut transaction = client.transaction()?;
+			transaction.batch_execute(&migration_query)?;
+			transaction.batch_execute(&format!("
 				insert into _schema_versions (current_version, previous_version) values ({current_version}, {previous_version})
 			"))?;
+			transaction.commit()?;
+
 			Ok(())
 		};
 
@@ -524,18 +527,23 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 enum Command {
-	/// cleans the current instance of all temporary databases
-	Clean,
-
+	/// generate new migration and place in migrations folder
+	Generate {
+		/// description of migration, will be converted to "snake_case"
+		migration_description: String,
+	},
 	/// apply all migrations to database
 	Migrate,
 	/// ensure both database and migrations folder are current with schema
 	/// and compact to only one migration
 	Compact,
-	/// generate new migration and place in migrations folder
-	Generate {
-		/// description of migration, will be converted to "snake_case"
-		migration_description: String,
+
+	/// checks that `source` and `target` are in sync, throws error otherwise
+	Check {
+		#[clap(arg_enum)]
+		source: Backend,
+		#[clap(arg_enum)]
+		target: Backend,
 	},
 	/// prints out the sql diff necessary to convert `source` to `target`
 	Diff {
@@ -545,13 +553,8 @@ enum Command {
 		target: Backend,
 	},
 
-	/// checks that `source` and `target` are in sync, throws error otherwise
-	Check {
-		#[clap(arg_enum)]
-		source: Backend,
-		#[clap(arg_enum)]
-		target: Backend,
-	},
+	/// cleans the current instance of all temporary databases
+	Clean,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ArgEnum)]
@@ -573,17 +576,17 @@ fn main() -> Result<()> {
 			let mut client = args.pg_url.connect(postgres::NoTls)?;
 			command_migrate(&args, &mut client)?;
 		},
-		Command::Clean => {
-			command_clean(args.pg_url)?;
-		},
 		Command::Compact => {
 			command_compact(&args)?;
+		},
+		Command::Check{source, target} => {
+			command_check(&args, source, target)?;
 		},
 		Command::Diff{source, target} => {
 			command_diff(&args, source, target)?;
 		},
-		Command::Check{source, target} => {
-			command_check(&args, source, target)?;
+		Command::Clean => {
+			command_clean(args.pg_url)?;
 		},
 	}
 
