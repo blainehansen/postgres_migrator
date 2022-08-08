@@ -20,7 +20,7 @@ anyhow = "1.0"
 clap = { version = "3", features = ["derive", "env"] }
 
 [dev-dependencies]
-serial_test = "*"
+serial_test = "0.8"
 # https://docs.rs/assert_cmd/latest/assert_cmd/
 # assert_cmd = "*"
 # https://docs.rs/assert_fs/latest/assert_fs/
