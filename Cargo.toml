@@ -15,7 +15,7 @@ categories = ["command-line-utilities", "database"]
 [dependencies]
 postgres = "0.19"
 chrono = "0.4"
-regex = "*"
+regex = "1"
 anyhow = "1.0"
 clap = { version = "*", features = ["derive", "env"] }
 
