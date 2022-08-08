@@ -10,14 +10,19 @@ test:
 full_test:
 	docker exec -it migrator-dev cargo test -- --ignored
 
-build: test full_test
-	docker build -f release.Dockerfile -t blainehansen/migrator .
+build:
+	docker build -f release.Dockerfile -t blainehansen/postgres_migrator .
 
-integration_test: build
+integration_test: test full_test build
 	#!/usr/bin/env bash
 	set -euo pipefail
 	PG_URL='postgres://experiment_user:asdf@localhost:5432/experiment_db?sslmode=disable'
-	docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working -e PG_URL=$PG_URL blainehansen/migrator migrate
+	docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working -e PG_URL=$PG_URL blainehansen/postgres_migrator migrate
+
+compose_test:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	docker exec -it -u $(id -u ${USER}):$(id -g ${USER}) postgres_migrator postgres_migrator migrate
 
 _status_clean:
 	#!/usr/bin/env bash
@@ -43,9 +48,10 @@ release SEMVER_PORTION: _status_clean build integration_test
 
 	git commit -am $GIT_VERSION
 	git tag $GIT_VERSION
-	docker tag blainehansen/migrator blainehansen/migrator:$VERSION
-	docker push blainehansen/migrator:$VERSION
-	docker push blainehansen/migrator:latest
+	docker tag blainehansen/postgres_migrator blainehansen/postgres_migrator:$VERSION
+	docker push blainehansen/postgres_migrator:$VERSION
+	docker push blainehansen/postgres_migrator:latest
+	cargo publish
 
 	git push origin main
 	git push origin main --tags

@@ -1,7 +1,16 @@
 [package]
-name = "migrator"
+name = "postgres_migrator"
 version = "0.4.2"
 edition = "2021"
+license = "MIT"
+authors = ["Blaine Hansen <faichenshing@gmail.com>"]
+description = "Simple postgres raw sql migration generator and manager."
+homepage = "https://github.com/blainehansen/postgres_migrator"
+documentation = "https://github.com/blainehansen/postgres_migrator"
+repository = "https://github.com/blainehansen/postgres_migrator"
+readme = "README.md"
+keywords = ["postgres", "migration", "generator", "manager", "raw-sql"]
+categories = ["command-line-utilities", "database"]
 
 [dependencies]
 postgres = "0.19"

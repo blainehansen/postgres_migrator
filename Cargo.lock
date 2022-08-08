@@ -368,18 +368,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "308cc39be01b73d0d18f82a0e7b2a3df85245f84af96fdddc5d202d27e47b86a"
 
 [[package]]
-name = "migrator"
-version = "0.4.1"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "postgres",
- "regex",
- "serial_test",
-]
-
-[[package]]
 name = "mio"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -540,6 +528,18 @@ dependencies = [
  "bytes",
  "fallible-iterator",
  "postgres-protocol",
+]
+
+[[package]]
+name = "postgres_migrator"
+version = "0.4.2"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "postgres",
+ "regex",
+ "serial_test",
 ]
 
 [[package]]

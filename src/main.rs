@@ -468,7 +468,7 @@ fn command_check(args: &Args, source: Backend, target: Backend) -> Result<()> {
 }
 
 
-const TEMP_DB_COMMENT: &'static str = "'TEMP DB CREATED BY migrator'";
+const TEMP_DB_COMMENT: &'static str = "'TEMP DB CREATED BY postgres_migrator'";
 
 struct TempDb {
 	dbname: String,
@@ -655,7 +655,7 @@ fn test_full() -> Result<()> {
 
 	command_clean(get_config())?;
 	client.execute("create database garbage_tmp", &[])?;
-	client.batch_execute("comment on database garbage_tmp is 'TEMP DB CREATED BY migrator';")?;
+	client.batch_execute("comment on database garbage_tmp is 'TEMP DB CREATED BY postgres_migrator';")?;
 	command_clean(get_config())?;
 	// this is just a ghetto way to make sure `clean` actually removes garbage_tmp, since this command will fail otherwise
 	client.execute("create database garbage_tmp", &[])?;

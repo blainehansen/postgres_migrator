@@ -1,0 +1,24 @@
+version: '3'
+services:
+  postgres_migrator:
+    image: blainehansen/postgres_migrator
+    container_name: postgres_migrator
+    depends_on:
+      - db
+    environment:
+      - PG_URL=postgres://experiment_user:asdf@db:5432/experiment_db?sslmode=disable
+    volumes:
+      - .:/working/
+    tty: true
+    entrypoint: tail -F anything
+
+  db:
+    image: postgres:alpine
+    container_name: db
+    environment:
+      - POSTGRES_DB=experiment_db
+      - POSTGRES_USER=experiment_user
+      - POSTGRES_PASSWORD=asdf
+    ports:
+      - "5432:5432"
+    command: postgres -c 'max_wal_size=2GB'
