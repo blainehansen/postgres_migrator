@@ -63,16 +63,16 @@ To make this easier to manage, you can package that command in a function, alias
 
 ```bash
 function postgres_migrator {
-  local result=$(docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v -e PG_URL=$PG_URL $(pwd):/working blainehansen/postgres_migrator "$@")
+  local result=$(docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working -e PG_URL=$PG_URL blainehansen/postgres_migrator "$@")
   echo $result
   return $?
 }
 
 # or
-alias postgres_migrator="docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v -e PG_URL=$PG_URL $(pwd):/working blainehansen/postgres_migrator"
+alias postgres_migrator="docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working -e PG_URL=$PG_URL blainehansen/postgres_migrator"
 
 # or in it's own executable file
-docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v -e PG_URL=$PG_URL $(pwd):/working blainehansen/postgres_migrator "$@"
+docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working -e PG_URL=$PG_URL blainehansen/postgres_migrator "$@"
 
 # now you can call it more cleanly
 postgres_migrator generate 'adding users table'
