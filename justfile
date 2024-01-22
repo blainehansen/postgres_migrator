@@ -16,7 +16,7 @@ build:
 integration_test: test full_test build
 	#!/usr/bin/env bash
 	set -euo pipefail
-	PG_URL='postgres://experiment_user:asdf@localhost:5432/experiment_db?sslmode=disable'
+	PG_URL='postgres://experiment_user:asdf@localhost:5432/experiment-db?sslmode=disable'
 	docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working -e PG_URL=$PG_URL blainehansen/postgres_migrator migrate
 
 compose_test:

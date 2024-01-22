@@ -555,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "postgres_migrator"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "chrono",

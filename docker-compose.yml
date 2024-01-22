@@ -9,7 +9,7 @@ services:
     depends_on:
       - db
     environment:
-      - PG_URL=postgres://experiment_user:asdf@db:5432/experiment_db?sslmode=disable
+      - PG_URL=postgres://experiment_user:asdf@db:5432/experiment-db?sslmode=disable
     volumes:
       - .:/usr/working/
     command: tail -F anything
@@ -18,7 +18,7 @@ services:
     image: postgres:alpine
     container_name: db
     environment:
-      - POSTGRES_DB=experiment_db
+      - POSTGRES_DB=experiment-db
       - POSTGRES_USER=experiment_user
       - POSTGRES_PASSWORD=asdf
     ports:

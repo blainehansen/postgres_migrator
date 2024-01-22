@@ -417,7 +417,7 @@ fn command_clean(mut base_config: Config) -> Result<()> {
 	");
 	for row in client.query(&query, &[])? {
 		let dbname: String = row.get("dbname");
-		client.batch_execute(&format!("drop database if exists {dbname}"))?;
+		client.batch_execute(&format!(r#"drop database if exists "{dbname}""#))?;
 	}
 
 	Ok(())
@@ -484,8 +484,8 @@ impl TempDb {
 		config.dbname(&dbname);
 
 		let mut client = base_config.clone().dbname("template1").connect(postgres::NoTls)?;
-		client.execute(&format!("create database {dbname}"), &[])?;
-		client.batch_execute(&format!("comment on database {dbname} is {TEMP_DB_COMMENT}"))?;
+		client.execute(&format!(r#"create database "{dbname}""#), &[])?;
+		client.batch_execute(&format!(r#"comment on database "{dbname}" is {TEMP_DB_COMMENT}"#))?;
 
 		Ok(TempDb{dbname, config})
 	}
@@ -498,7 +498,7 @@ impl Drop for TempDb {
 		let _ = self.config.dbname("template1").connect(postgres::NoTls)
 			.map_err(|err| { eprintln!("unable to drop {dbname}: {err}"); err })
 			.and_then(|mut client| {
-				client.batch_execute(&format!("drop database if exists {dbname}"))
+				client.batch_execute(&format!(r#"drop database if exists "{dbname}""#))
 			})
 			.map_err(|err| { eprintln!("unable to drop {dbname}: {err}"); err });
 	}
