@@ -393,6 +393,8 @@ fn command_compact(args: &Args) -> Result<()> {
 fn command_migrate(args: &Args, client: &mut postgres::Client) -> Result<()> {
 	let (migration_files, actual_version) = gather_validated_migrations(&args, client)?;
 
+	// we need a way to differentiate between a null actual_version and the table not existing or being empty
+
 	let need_onboard: bool = client
 		.query_one("
 			select exists (select true from pg_catalog.pg_class where relname = '_schema_versions' and relkind = 'r') as table_existence
