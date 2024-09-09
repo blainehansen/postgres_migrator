@@ -106,6 +106,7 @@ struct MigrationFile {
 	display_file_path: String,
 	current_version: String,
 	previous_version: String,
+	is_onboard: bool,
 }
 
 impl MigrationFile {
@@ -118,7 +119,7 @@ impl MigrationFile {
 			let display_file_path = file_path.to_string_lossy().to_string();
 
 			// first parse the file_name and version strings
-			let file_name = file_path.file_name().ok_or_else(|| anyhow!("no file name forst this path: {display_file_path}"))?;
+			let file_name = file_path.file_name().ok_or_else(|| anyhow!("no file name for this path: {display_file_path}"))?;
 			let file_name = file_name.to_str().ok_or_else(|| anyhow!("file name isn't valid unicode: {display_file_path}"))?;
 			let mut portions = file_name.split(".");
 			let current_version = portions.next()
@@ -139,11 +140,12 @@ impl MigrationFile {
 				}
 			};
 			let current_version = validate_version_string(current_version)?;
-			let previous_version = match previous_version == "null" {
+			let is_onboard = previous_version == "onboard";
+			let previous_version = match previous_version == "null" || is_onboard {
 				true => {
 					// check that nulls are only allowed in the first spot
 					if !(index == 0) {
-						return Err(anyhow!("null previous_version in migration that isn't the first: {display_file_path}"));
+						return Err(anyhow!("null or onboard previous_version in migration that isn't the first: {display_file_path}"));
 					}
 					previous_version
 				},
@@ -156,7 +158,7 @@ impl MigrationFile {
 				}
 			};
 
-			migration_files.push(MigrationFile{file_path, display_file_path, current_version, previous_version});
+			migration_files.push(MigrationFile{file_path, display_file_path, current_version, previous_version, is_onboard});
 		}
 
 		Ok(migration_files)
@@ -167,7 +169,11 @@ impl MigrationFile {
 fn test_migration_files_vec_from_paths() {
 	let ex = |file_path: PathBuf, current_version: &str, previous_version: &str| {
 		let display_file_path = file_path.to_string_lossy().to_string();
-		MigrationFile{file_path, display_file_path, current_version: current_version.to_string(), previous_version: previous_version.to_string()}
+		MigrationFile{
+			file_path, display_file_path,
+			current_version: current_version.to_string(), previous_version: previous_version.to_string(),
+			is_onboard: previous_version == "onboard",
+		}
 	};
 	let version = create_timestamp();
 
@@ -191,6 +197,11 @@ fn test_migration_files_vec_from_paths() {
 		MigrationFile::vec_from_paths(vec![file_path.clone()]).unwrap(),
 		vec![ex(file_path, &version, "null")],
 	);
+	let file_path = PathBuf::from(format!("ok/{version}.onboard.sql"));
+	assert_eq!(
+		MigrationFile::vec_from_paths(vec![file_path.clone()]).unwrap(),
+		vec![ex(file_path, &version, "onboard")],
+	);
 
 	let file_path1 = PathBuf::from(format!("ok/{version}.null.sql"));
 	let file_path2 = PathBuf::from(format!("ok/90000000000000.{version}.sql"));
@@ -200,6 +211,20 @@ fn test_migration_files_vec_from_paths() {
 		MigrationFile::vec_from_paths(vec![file_path1.clone(), file_path2.clone(), file_path3.clone(), file_path4.clone()]).unwrap(),
 		vec![
 			ex(file_path1, &version, "null"),
+			ex(file_path2, "90000000000000", &version),
+			ex(file_path3, "90000000000001", "90000000000000"),
+			ex(file_path4, "90000000000002", "90000000000001"),
+		],
+	);
+
+	let file_path1 = PathBuf::from(format!("ok/{version}.onboard.sql"));
+	let file_path2 = PathBuf::from(format!("ok/90000000000000.{version}.sql"));
+	let file_path3 = PathBuf::from(format!("ok/90000000000001.90000000000000.sql"));
+	let file_path4 = PathBuf::from(format!("ok/90000000000002.90000000000001.sql"));
+	assert_eq!(
+		MigrationFile::vec_from_paths(vec![file_path1.clone(), file_path2.clone(), file_path3.clone(), file_path4.clone()]).unwrap(),
+		vec![
+			ex(file_path1, &version, "onboard"),
 			ex(file_path2, "90000000000000", &version),
 			ex(file_path3, "90000000000001", "90000000000000"),
 			ex(file_path4, "90000000000002", "90000000000001"),
@@ -283,15 +308,8 @@ fn test_config_try_from_str() {
 }
 
 
-fn gather_validated_migrations(args: &Args, client: &mut postgres::Client) -> Result<(Vec<MigrationFile>, Option<String>)> {
-	client.batch_execute("
-		create table if not exists _schema_versions (
-			current_version char(14) not null unique,
-			previous_version char(14) references _schema_versions(current_version) unique,
-			check (current_version > previous_version)
-		);
-		create unique index if not exists i_schema_versions on _schema_versions ((previous_version is null)) where previous_version is null
-	")?;
+fn gather_validated_migrations(args: &Args, _client: &mut postgres::Client) -> Result<(Vec<MigrationFile>, Option<String>)> {
+	// TODO use client to grab existing migrations and check them against the directory?
 
 	ensure_migrations_directory(&args.migrations_directory)?;
 	let migration_files = MigrationFile::vec_from_paths(list_sql_files(&args.migrations_directory)?)?;
@@ -331,11 +349,11 @@ fn apply_sql_files(config: &Config, sql_files: Vec<PathBuf>) -> Result<()> {
 }
 
 
-fn command_generate(args: &Args, raw_description: &str) -> Result<String> {
+fn command_generate(args: &Args, raw_description: &str, generate_onboard: bool) -> Result<String> {
 	let mut client = args.pg_url.connect(postgres::NoTls)?;
 	let dbname = args.pg_url.get_dbname().ok_or(anyhow!("need a dbname to run generate command"))?;
 	let (migration_files, previous_version) = gather_validated_migrations(&args, &mut client)?;
-	let previous_version = previous_version.unwrap_or_else(get_null_string);
+	let previous_version = if generate_onboard { "onboard".to_string() } else { previous_version.unwrap_or_else(get_null_string) };
 
 	let description_slug = make_slug(raw_description);
 	let current_version = create_timestamp();
@@ -356,12 +374,12 @@ fn command_generate(args: &Args, raw_description: &str) -> Result<String> {
 
 fn command_compact(args: &Args) -> Result<()> {
 	let mut client = args.pg_url.connect(postgres::NoTls)?;
-	command_generate(args, "ensuring_current")?;
+	command_generate(args, "ensuring_current", false)?;
 	command_migrate(args, &mut client)?;
 
 	purge_migrations_directory(&args.migrations_directory)?;
 	ensure_migrations_directory(&args.migrations_directory)?;
-	let current_version = command_generate(args, "compacted_initial")?;
+	let current_version = command_generate(args, "compacted_initial", false)?;
 	println!("new version number is: {current_version}");
 
 	client.batch_execute(&format!("
@@ -373,13 +391,45 @@ fn command_compact(args: &Args) -> Result<()> {
 
 
 fn command_migrate(args: &Args, client: &mut postgres::Client) -> Result<()> {
-	let migration_files = gather_validated_migrations(&args, client)?.0;
+	let (migration_files, actual_version) = gather_validated_migrations(&args, client)?;
 
-	let actual_version: Option<String> = client
-		.query_one("select max(current_version) as current_version from _schema_versions", &[])?
-		.get("current_version");
+	let need_onboard: bool = client
+		.query_one("
+			select exists (select true from pg_catalog.pg_class where relname = '_schema_versions' and relkind = 'r') as table_existence
+		", &[])?
+		.get("table_existence");
 
-	for MigrationFile{display_file_path, file_path, current_version, previous_version} in migration_files {
+	// TODO if the _schema_versions table doesn't exist, then require the first migration to be an "onboarding" migration
+	// an onboarding migration doesn't actually perform the sql text, instead it just performs a schema check,
+	// and then adds the _schema_versions table and the version number of that first migration
+
+	for (index, MigrationFile{display_file_path, file_path, current_version, previous_version, is_onboard}) in migration_files.iter().enumerate() {
+		if !need_onboard && *is_onboard {
+			return Err(anyhow!("TODO problem"))
+		}
+		if index != 0 && *is_onboard {
+			return Err(anyhow!("TODO problem"))
+		}
+
+		if index == 0 && *is_onboard && need_onboard {
+			// TODO perform schema check
+
+			client.batch_execute("
+				create table if not exists _schema_versions (
+					current_version char(14) not null unique,
+					previous_version char(14) references _schema_versions(current_version) unique,
+					check (current_version > previous_version)
+				);
+				create unique index if not exists i_schema_versions on _schema_versions ((previous_version is null)) where previous_version is null
+			")?;
+
+			client.batch_execute(&format!("
+				insert into _schema_versions (current_version, previous_version) values ({current_version}, {previous_version})
+			"))?;
+
+			continue
+		}
+
 		let mut perform_migration = || -> Result<()> {
 			println!("performing {}", display_file_path);
 			let mut file = fs::File::open(&file_path)?;
@@ -398,8 +448,14 @@ fn command_migrate(args: &Args, client: &mut postgres::Client) -> Result<()> {
 
 		match actual_version {
 			None => perform_migration()?,
-			Some(ref actual_version) if &current_version > actual_version => perform_migration()?,
-			_ => println!("not performing {}", display_file_path),
+			Some(ref actual_version) => {
+				if current_version > actual_version {
+					perform_migration()?;
+				}
+				else {
+					println!("not performing {}", display_file_path);
+				}
+			},
 		}
 	}
 
@@ -531,6 +587,10 @@ enum Command {
 	Generate {
 		/// description of migration, will be converted to "snake_case"
 		migration_description: String,
+		/// generate an "onboarding" migration,
+		/// to get postgres_migrator attached to a database that already has a schema
+		#[clap(long)]
+		generate_onboard: bool,
 	},
 	/// apply all migrations to database
 	Migrate,
@@ -569,8 +629,8 @@ fn main() -> Result<()> {
 	let args = Args::parse();
 
 	match args.command {
-		Command::Generate{ref migration_description} => {
-			command_generate(&args, &migration_description)?;
+		Command::Generate{ref migration_description, generate_onboard} => {
+			command_generate(&args, &migration_description, generate_onboard)?;
 		},
 		Command::Migrate => {
 			let mut client = args.pg_url.connect(postgres::NoTls)?;
@@ -631,13 +691,13 @@ fn test_full() -> Result<()> {
 	assert!(compute_backend_diff(&get_args("schemas/schema.1"), Database, Migrations)?.is_empty());
 
 	// # schema.1
-	command_generate(&get_args("schemas/schema.1"), "one")?;
+	command_generate(&get_args("schemas/schema.1"), "one", false)?;
 	assert_eq!(get_migration_count(), 1);
 	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
 	// # schema.2
-	command_generate(&get_args("schemas/schema.2"), "two")?;
+	command_generate(&get_args("schemas/schema.2"), "two", false)?;
 	assert_eq!(get_migration_count(), 2);
 	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
 	client.batch_execute("select id, name, flavor from fruit")?;
@@ -648,7 +708,7 @@ fn test_full() -> Result<()> {
 	client.batch_execute("select person.name, fruit.name, flavor from person join fruit on person.favorite_fruit = fruit.id where flavor = 'SALTY'")?;
 
 	// # schema.1
-	command_generate(&get_args("schemas/schema.1"), "back to one")?;
+	command_generate(&get_args("schemas/schema.1"), "back to one", false)?;
 	assert_eq!(get_migration_count(), 2);
 	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
 	client.batch_execute("select id, name, color from fruit")?;
