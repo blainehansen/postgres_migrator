@@ -395,6 +395,7 @@ fn command_compact(args: &Args) -> Result<()> {
 fn command_migrate(args: &Args, client: &mut postgres::Client) -> Result<()> {
 	let (migration_files, actual_version) = gather_validated_migrations(&args, client)?;
 
+	//
 	ensure_versions_table(client)?;
 
 	let need_onboard: bool = client
