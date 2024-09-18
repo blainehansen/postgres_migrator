@@ -1,4 +1,4 @@
-use std::{io::{self, Read, Write}, fs, path::PathBuf};
+use std::{fs, io::{self, Read, Write}, path::PathBuf};
 use chrono::Utc;
 use postgres::Config;
 use anyhow::{anyhow, Result, Context};
@@ -311,7 +311,7 @@ fn test_config_try_from_str() {
 }
 
 
-fn gather_validated_migrations(args: &Args, _client: &mut postgres::Client) -> Result<(Vec<MigrationFile>, Option<String>)> {
+fn gather_validated_migrations(args: &Args) -> Result<(Vec<MigrationFile>, Option<String>)> {
 	// TODO use client to grab existing migrations and check them against the directory?
 
 	ensure_migrations_directory(&args.migrations_directory)?;
@@ -353,10 +353,12 @@ fn apply_sql_files(config: &Config, sql_files: Vec<PathBuf>) -> Result<()> {
 
 
 fn command_generate(args: &Args, raw_description: &str, is_onboard: bool) -> Result<String> {
-	let mut client = args.pg_url.connect(postgres::NoTls)?;
 	let dbname = args.pg_url.get_dbname().ok_or(anyhow!("need a dbname to run generate command"))?;
-	let (migration_files, previous_version) = gather_validated_migrations(&args, &mut client)?;
-	let previous_version = if is_onboard { "onboard".to_string() } else { previous_version.unwrap_or_else(get_null_string) };
+	let (migration_files, previous_version) = gather_validated_migrations(&args)?;
+	if is_onboard && previous_version.is_some() {
+		return Err(anyhow!("can't generate an onboard migration when there are already migrations"));
+	}
+	let previous_version = previous_version.unwrap_or_else(|| if is_onboard { "onboard".to_string() } else { get_null_string() });
 
 	let description_slug = make_slug(raw_description);
 	let current_version = create_timestamp();
@@ -392,47 +394,50 @@ fn command_compact(args: &Args) -> Result<()> {
 	Ok(())
 }
 
+const EXISTS_QUERY: &'static str = "select true from pg_catalog.pg_class where relname = '_schema_versions' and relkind = 'r'";
+
 fn command_migrate(args: &Args, client: &mut postgres::Client) -> Result<()> {
-	let (migration_files, actual_version) = gather_validated_migrations(&args, client)?;
+	let migration_files = gather_validated_migrations(&args)?.0;
 
-	//
-	ensure_versions_table(client)?;
+	let actual_version: Option<String> = {
+		let mut transaction = client.transaction()?;
+		transaction.execute(&format!(r#"
+			create function pg_temp.current_schema_version() returns setof char(14) as $$
+			begin
+			  if ({EXISTS_QUERY}) then
+			    return query select max(current_version) from _schema_versions;
+			  else
+			    return query select null::char(14);
+			  end if;
+			end;
+			$$ language plpgsql;
+		"#), &[])?;
 
-	let need_onboard: bool = client
-		.query_one("
-			select exists (select true from pg_catalog.pg_class where relname = '_schema_versions' and relkind = 'r') as table_existence
-		", &[])?
-		.get("table_existence");
-
-	// TODO if the _schema_versions table doesn't exist, then require the first migration to be an "onboarding" migration
-	// an onboarding migration doesn't actually perform the sql text, instead it just performs a schema check,
-	// and then adds the _schema_versions table and the version number of that first migration
+		transaction
+			.query_one("select pg_temp.current_schema_version() as current_version", &[])?
+			.get("current_version")
+	};
 
 	for (index, MigrationFile{display_file_path, file_path, current_version, previous_version, is_onboard}) in migration_files.iter().enumerate() {
-		if !need_onboard && *is_onboard {
-			return Err(anyhow!("TODO problem"))
-		}
-		if index != 0 && *is_onboard {
-			return Err(anyhow!("TODO problem"))
-		}
-
-		if index == 0 && *is_onboard && need_onboard {
-			// TODO perform schema check
-			ensure_versions_table(client)?;
-			client.batch_execute(&format!("
-				insert into _schema_versions (current_version, previous_version) values ({current_version}, {previous_version})
-			"))?;
-			continue
+		let is_onboard = *is_onboard;
+		if index != 0 && is_onboard {
+			return Err(anyhow!("migration {display_file_path} is listed as an onboard migration, but isn't the first one (at index {index})"));
 		}
 
 		let mut perform_migration = || -> Result<()> {
-			println!("performing {}", display_file_path);
-			let mut file = fs::File::open(&file_path)?;
-			let mut migration_query = String::new();
-			file.read_to_string(&mut migration_query)?;
+			if index == 0 {
+				create_versions_table(client)?;
+			}
 
 			let mut transaction = client.transaction()?;
-			transaction.batch_execute(&migration_query)?;
+
+			if !is_onboard {
+				let mut file = fs::File::open(&file_path)?;
+				let mut migration_query = String::new();
+				file.read_to_string(&mut migration_query)?;
+				transaction.batch_execute(&migration_query)?;
+			}
+
 			transaction.batch_execute(&format!("
 				insert into _schema_versions (current_version, previous_version) values ({current_version}, {previous_version})
 			"))?;
@@ -445,6 +450,7 @@ fn command_migrate(args: &Args, client: &mut postgres::Client) -> Result<()> {
 			None => perform_migration()?,
 			Some(ref actual_version) => {
 				if current_version > actual_version {
+					println!("performing {}", display_file_path);
 					perform_migration()?;
 				}
 				else {
@@ -475,27 +481,9 @@ fn command_clean(mut base_config: Config) -> Result<()> {
 }
 
 
-fn ensure_db(args: &Args, dbname: &str, base_config: &Config, backend: Backend) -> Result<(Option<TempDb>, Config)> {
-	match backend {
-		Backend::Migrations => {
-			let temp = TempDb::new(dbname, "migrations", base_config)?;
-			apply_sql_files(&temp.config, list_sql_files(&args.migrations_directory)?)?;
-			let config = temp.config.clone();
-			Ok((Some(temp), config))
-		},
-		Backend::Schema => {
-			let temp = TempDb::new(dbname, "schema", base_config)?;
-			apply_sql_files(&temp.config, list_sql_files(&args.schema_directory)?)?;
-			let config = temp.config.clone();
-			Ok((Some(temp), config))
-		},
-		Backend::Database => Ok((None, base_config.clone())),
-	}
-}
-
-fn ensure_versions_table(client: &mut postgres::Client) -> Result<()> {
+fn create_versions_table(client: &mut postgres::Client) -> Result<()> {
 	client.batch_execute("
-		create table if not exists _schema_versions (
+		create table _schema_versions (
 			current_version char(14) not null unique,
 			previous_version char(14) references _schema_versions(current_version) unique,
 			check (current_version > previous_version)
@@ -506,14 +494,44 @@ fn ensure_versions_table(client: &mut postgres::Client) -> Result<()> {
 	Ok(())
 }
 
+fn ensure_db(args: &Args, dbname: &str, base_config: &Config, backend: Backend, need_version_table: bool) -> Result<(Option<TempDb>, Config)> {
+	let do_it = |suffix: &'static str, dir: &str| {
+		let temp = TempDb::new(dbname, suffix, base_config)?;
+		if need_version_table {
+			let mut client = temp.config.connect(postgres::NoTls)?;
+			create_versions_table(&mut client)?;
+		}
+		apply_sql_files(&temp.config, list_sql_files(dir)?)?;
+
+		let config = temp.config.clone();
+		Ok((Some(temp), config))
+	};
+
+	match backend {
+		Backend::Migrations => { do_it("migrations", &args.migrations_directory) },
+		Backend::Schema => { do_it("schema", &args.schema_directory) },
+		Backend::Database => Ok((None, base_config.clone())),
+	}
+}
+
 fn compute_backend_diff(args: &Args, source: Backend, target: Backend) -> Result<String> {
+	// TODO we could implement ignores by asking for sql that we just apply to other sources before we diff them against the database
+
 	if source == target {
 		return Err(anyhow!("can't diff {:?} against itself", source))
 	}
 
+	let need_version_table: bool = match (source, target) {
+		(_, Backend::Database) | (Backend::Database, _) => {
+			let mut client = args.pg_url.connect(postgres::NoTls)?;
+			client.query_one(&format!("select exists ({EXISTS_QUERY}) as table_exists"), &[])?.get("table_exists")
+		},
+		_ => false,
+	};
+
 	let dbname = args.pg_url.get_dbname().ok_or(anyhow!("provided pg_url has no dbname"))?;
-	let source = ensure_db(args, dbname, &args.pg_url, source)?;
-	let target = ensure_db(args, dbname, &args.pg_url, target)?;
+	let source = ensure_db(args, dbname, &args.pg_url, source, need_version_table)?;
+	let target = ensure_db(args, dbname, &args.pg_url, target, need_version_table)?;
 	Ok(compute_diff(&source.1, &target.1)?)
 }
 
@@ -634,42 +652,25 @@ enum Backend {
 
 
 fn main() -> Result<()> {
-	// there are a few times when we need to insert the _schema_versions table:
-	// - when we perform the first migration. this is always true, even if the first migration isn't an onboarding type
-	// - to anything we diff the database against. this addition is artificial, to ensure the thing doesn't show up in any diffs
-	// 	- I guess if someone is using `check` against a database that doesn't have the _schema_versions table, that is in fact a problem!
-	// -
-
 	let args = Args::parse();
 
 	match args.command {
-		// when we generate, we perform a diff
-		// we always diff the migrations to the schema, so in this case we don't need to insert _schema_versions in either
 		Command::Generate{ref migration_description, is_onboard} => {
 			command_generate(&args, &migration_description, is_onboard)?;
 		},
-		// we never need to diff here, but we do need to:
-		// - ensure the _schema_versions table, we can probably do this unconditionally at the beginning
-		// - select the current version from the table (which might not exist)
-		// - detect if the first migration is an onboard, and if so don't actually apply the migration, but do a check?
 		Command::Migrate => {
 			let mut client = args.pg_url.connect(postgres::NoTls)?;
 			command_migrate(&args, &mut client)?;
 		},
-		// do compact stuff
-		// diffs happen here, so we might have to insert _schema_versions
 		Command::Compact => {
 			command_compact(&args)?;
 		},
-		// this is just a wrapper in a diff, so yes
 		Command::Check{source, target} => {
 			command_check(&args, source, target)?;
 		},
-		// obviously yes
 		Command::Diff{source, target} => {
 			command_diff(&args, source, target)?;
 		},
-		// no need
 		Command::Clean => {
 			command_clean(args.pg_url)?;
 		},

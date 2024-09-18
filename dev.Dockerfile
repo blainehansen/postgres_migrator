@@ -1,4 +1,4 @@
-FROM rust:latest as builder
+FROM rust:latest AS builder
 WORKDIR /usr/working/
 
 RUN apt update && yes | apt install python3 python3-pip
