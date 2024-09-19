@@ -35,7 +35,7 @@ _status_clean:
 
 release SEMVER_PORTION: _status_clean build integration_test
 	#!/usr/bin/env bash
-	set -euo pipefail
+	set -euxo pipefail
 
 	cargo bump {{SEMVER_PORTION}}
 
@@ -46,11 +46,11 @@ release SEMVER_PORTION: _status_clean build integration_test
 	GIT_VERSION="v$VERSION"
 	echo $GIT_VERSION
 
-	git commit -am $GIT_VERSION
-	git tag $GIT_VERSION
 	docker tag blainehansen/postgres_migrator blainehansen/postgres_migrator:$VERSION
 	docker push blainehansen/postgres_migrator:$VERSION
 	docker push blainehansen/postgres_migrator:latest
+	git commit -am $GIT_VERSION
+	git tag $GIT_VERSION
 	cargo publish
 
 	git push origin main
