@@ -158,6 +158,19 @@ SUBCOMMANDS:
     help        Print this message or the help of the given subcommand(s)
 ```
 
+## How to use with an existing database?
+
+If you already have a database with an existing schema, you need to generate your first migration using the `--is-onboard` flag:
+
+```bash
+postgres_migrator generate 'first migration with postgres_migrator' --is-onboard
+# migrations folder should have migration named `$new_version.onboard.first_migration_with_postgres_migrator.sql`
+```
+
+The `--is-onboard` flag changes the first migration to be an "onboarding" migration. When this migration is run, the actual sql in the migration won't be applied, and instead `postgres_migrator` will just create the `_schema_versions` table and insert the version of the migration.
+
+After you've created this first "onboarding" migration, and can just use `postgres_migrator` as usual!
+
 ## What is `compact`?
 
 Over time a migrations folder can get large and unwieldy, with possibly hundreds of migrations. This long log gets less and less useful over time, especially for small teams. The `compact` command replaces all migrations with a single migration that creates the entire schema at once.
