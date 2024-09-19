@@ -150,7 +150,7 @@ impl MigrationFile {
 					if !(index == 0) {
 						return Err(anyhow!("null or onboard previous_version in migration that isn't the first: {display_file_path}"));
 					}
-					previous_version
+					get_null_string()
 				},
 				false => {
 					let previous_version = previous_version;
@@ -172,10 +172,12 @@ impl MigrationFile {
 fn test_migration_files_vec_from_paths() {
 	let ex = |file_path: PathBuf, current_version: &str, previous_version: &str| {
 		let display_file_path = file_path.to_string_lossy().to_string();
+		let is_onboard = previous_version == "onboard";
 		MigrationFile{
 			file_path, display_file_path,
-			current_version: current_version.to_string(), previous_version: previous_version.to_string(),
-			is_onboard: previous_version == "onboard",
+			current_version: current_version.to_string(),
+			previous_version: if is_onboard { get_null_string() } else { previous_version.to_string() },
+			is_onboard,
 		}
 	};
 	let version = create_timestamp();
@@ -682,7 +684,7 @@ fn main() -> Result<()> {
 #[test]
 #[serial_test::serial]
 #[ignore]
-fn test_full() -> Result<()> {
+fn test_full_no_onboard() -> Result<()> {
 	fn get_config() -> Config {
 		std::env::var("PG_URL").unwrap().parse::<Config>().unwrap()
 	}
@@ -719,9 +721,95 @@ fn test_full() -> Result<()> {
 	// # schema.1
 	command_generate(&get_args("schemas/schema.1"), "one", false)?;
 	assert_eq!(get_migration_count(), 1);
+	let migration = &gather_validated_migrations(&get_args(""))?.0[0];
+	assert!(!migration.is_onboard);
+	assert!(migration.previous_version == get_null_string());
 	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
+	// # schema.2
+	command_generate(&get_args("schemas/schema.2"), "two", false)?;
+	assert_eq!(get_migration_count(), 2);
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
+	client.batch_execute("select id, name, flavor from fruit")?;
+
+	// # schema.3
+	command_compact(&get_args("schemas/schema.3"))?;
+	assert_eq!(get_migration_count(), 1);
+	client.batch_execute("select person.name, fruit.name, flavor from person join fruit on person.favorite_fruit = fruit.id where flavor = 'SALTY'")?;
+
+	// # schema.1
+	command_generate(&get_args("schemas/schema.1"), "back to one", false)?;
+	assert_eq!(get_migration_count(), 2);
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
+	client.batch_execute("select id, name, color from fruit")?;
+
+	command_clean(get_config())?;
+	client.execute("create database garbage_tmp", &[])?;
+	client.batch_execute("comment on database garbage_tmp is 'TEMP DB CREATED BY postgres_migrator';")?;
+	command_clean(get_config())?;
+	// this is just a ghetto way to make sure `clean` actually removes garbage_tmp, since this command will fail otherwise
+	client.execute("create database garbage_tmp", &[])?;
+	client.execute("drop database garbage_tmp", &[])?;
+
+	Ok(())
+}
+
+#[test]
+#[serial_test::serial]
+#[ignore]
+fn test_full_with_onboard() -> Result<()> {
+	fn get_config() -> Config {
+		std::env::var("PG_URL").unwrap().parse::<Config>().unwrap()
+	}
+	fn get_args(schema_directory: &'static str) -> Args {
+		Args {
+			pg_url: get_config(),
+			schema_directory: schema_directory.to_string(),
+			migrations_directory: DEFAULT_MIGRATIONS_DIRECTORY.to_string(),
+			command: Command::Clean,
+		}
+	}
+
+	fn get_migration_count() -> usize {
+		list_sql_files(DEFAULT_MIGRATIONS_DIRECTORY).unwrap().len()
+	}
+
+	let mut client = get_config().connect(postgres::NoTls)?;
+	client.batch_execute("
+		drop schema public cascade;
+		create schema public;
+		grant all on schema public to public;
+		comment on schema public is 'standard public schema';
+	")?;
+	purge_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	ensure_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+
+	use Backend::*;
+	assert!(command_check(&get_args("schemas/schema.1"), Database, Migrations).is_ok());
+	assert!(command_check(&get_args("schemas/schema.1"), Schema, Migrations).is_err());
+	assert!(command_check(&get_args("schemas/schema.1"), Database, Schema).is_err());
+	assert!(!compute_backend_diff(&get_args("schemas/schema.1"), Database, Schema)?.is_empty());
+	assert!(compute_backend_diff(&get_args("schemas/schema.1"), Database, Migrations)?.is_empty());
+
+	// # schema.1
+	// generate one using some schema
+	command_generate(&get_args("schemas/schema.1"), "one", true)?;
+	assert_eq!(get_migration_count(), 1);
+	let migration = &gather_validated_migrations(&get_args(""))?.0[0];
+	assert!(migration.is_onboard);
+	assert!(migration.previous_version == get_null_string());
+	// manually apply the schema
+	apply_sql_files(&get_config(), vec![PathBuf::from("schemas/schema.1/schema.sql")])?;
+	// apply migrations, which should work
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
+	client.batch_execute("select id, name, color from fruit")?;
+	// check diff is clean
+	assert!(command_check(&get_args("schemas/schema.1"), Database, Migrations).is_ok());
+	assert!(command_check(&get_args("schemas/schema.1"), Database, Schema).is_ok());
+	assert!(command_check(&get_args("schemas/schema.1"), Schema, Migrations).is_ok());
+
+	// everthing else we do should continue to work
 	// # schema.2
 	command_generate(&get_args("schemas/schema.2"), "two", false)?;
 	assert_eq!(get_migration_count(), 2);
