@@ -12,7 +12,7 @@ RUN cargo install --target x86_64-unknown-linux-musl --path .
 
 
 FROM python:alpine
-RUN pip install migra~=3.0.0 psycopg2-binary~=2.9.3
+RUN pip install migra~=3.0.0 psycopg2-binary~=2.9.3 setuptools
 
 COPY --from=builder /usr/local/cargo/bin/postgres_migrator /usr/bin/
 

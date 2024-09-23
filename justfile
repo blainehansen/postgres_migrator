@@ -18,11 +18,13 @@ integration_test: test full_test build
 	set -euo pipefail
 	PG_URL='postgres://experiment_user:asdf@localhost:5432/experiment-db?sslmode=disable'
 	docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working -e PG_URL=$PG_URL blainehansen/postgres_migrator migrate
+	docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working -e PG_URL=$PG_URL blainehansen/postgres_migrator --schema-directory schemas/schema.1 diff schema migrations
 
 compose_test:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	docker exec -it -u $(id -u ${USER}):$(id -g ${USER}) postgres_migrator postgres_migrator migrate
+	docker exec -it -u $(id -u ${USER}):$(id -g ${USER}) postgres_migrator postgres_migrator --schema-directory schemas/schema.1 diff schema migrations
 
 _status_clean:
 	#!/usr/bin/env bash
