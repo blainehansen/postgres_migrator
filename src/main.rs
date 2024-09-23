@@ -382,7 +382,7 @@ fn command_generate(args: &Args, raw_description: &str, is_onboard: bool) -> Res
 fn command_compact(args: &Args) -> Result<()> {
 	let mut client = args.pg_url.connect(postgres::NoTls)?;
 	command_generate(args, "ensuring_current", false)?;
-	command_migrate(args, &mut client)?;
+	command_migrate(args, &mut client, false)?;
 
 	purge_migrations_directory(&args.migrations_directory)?;
 	ensure_migrations_directory(&args.migrations_directory)?;
@@ -398,7 +398,7 @@ fn command_compact(args: &Args) -> Result<()> {
 
 const EXISTS_QUERY: &'static str = "select true from pg_catalog.pg_class where relname = '_schema_versions' and relkind = 'r'";
 
-fn command_migrate(args: &Args, client: &mut postgres::Client) -> Result<()> {
+fn command_migrate(args: &Args, client: &mut postgres::Client, actually_perform_onboard_migrations: bool) -> Result<()> {
 	let migration_files = gather_validated_migrations(&args)?.0;
 
 	let actual_version: Option<String> = {
@@ -433,7 +433,7 @@ fn command_migrate(args: &Args, client: &mut postgres::Client) -> Result<()> {
 
 			let mut transaction = client.transaction()?;
 
-			if !is_onboard {
+			if !is_onboard || actually_perform_onboard_migrations {
 				let mut file = fs::File::open(&file_path)?;
 				let mut migration_query = String::new();
 				file.read_to_string(&mut migration_query)?;
@@ -621,7 +621,11 @@ enum Command {
 		is_onboard: bool,
 	},
 	/// apply all migrations to database
-	Migrate,
+	Migrate {
+		/// necessary in dev situations where a clean database needs to have all migrations performed
+		#[clap(long)]
+		actually_perform_onboard_migrations: bool,
+	},
 	/// ensure both database and migrations folder are current with schema
 	/// and compact to only one migration
 	Compact,
@@ -660,9 +664,9 @@ fn main() -> Result<()> {
 		Command::Generate{ref migration_description, is_onboard} => {
 			command_generate(&args, &migration_description, is_onboard)?;
 		},
-		Command::Migrate => {
+		Command::Migrate {actually_perform_onboard_migrations} => {
 			let mut client = args.pg_url.connect(postgres::NoTls)?;
-			command_migrate(&args, &mut client)?;
+			command_migrate(&args, &mut client, actually_perform_onboard_migrations)?;
 		},
 		Command::Compact => {
 			command_compact(&args)?;
@@ -724,13 +728,13 @@ fn test_full_no_onboard() -> Result<()> {
 	let migration = &gather_validated_migrations(&get_args(""))?.0[0];
 	assert!(!migration.is_onboard);
 	assert!(migration.previous_version == get_null_string());
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
 	// # schema.2
 	command_generate(&get_args("schemas/schema.2"), "two", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false)?;
 	client.batch_execute("select id, name, flavor from fruit")?;
 
 	// # schema.3
@@ -741,7 +745,7 @@ fn test_full_no_onboard() -> Result<()> {
 	// # schema.1
 	command_generate(&get_args("schemas/schema.1"), "back to one", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
 	command_clean(get_config())?;
@@ -802,7 +806,7 @@ fn test_full_with_onboard() -> Result<()> {
 	// manually apply the schema
 	apply_sql_files(&get_config(), vec![PathBuf::from("schemas/schema.1/schema.sql")])?;
 	// apply migrations, which should work
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 	// check diff is clean
 	assert!(command_check(&get_args("schemas/schema.1"), Database, Migrations).is_ok());
@@ -813,7 +817,7 @@ fn test_full_with_onboard() -> Result<()> {
 	// # schema.2
 	command_generate(&get_args("schemas/schema.2"), "two", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false)?;
 	client.batch_execute("select id, name, flavor from fruit")?;
 
 	// # schema.3
@@ -824,7 +828,7 @@ fn test_full_with_onboard() -> Result<()> {
 	// # schema.1
 	command_generate(&get_args("schemas/schema.1"), "back to one", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?)?;
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
 	command_clean(get_config())?;
