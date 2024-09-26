@@ -382,7 +382,7 @@ fn command_generate(args: &Args, raw_description: &str, is_onboard: bool) -> Res
 fn command_compact(args: &Args) -> Result<()> {
 	let mut client = args.pg_url.connect(postgres::NoTls)?;
 	command_generate(args, "ensuring_current", false)?;
-	command_migrate(args, &mut client, false)?;
+	command_migrate(args, &mut client, false, false)?;
 
 	purge_migrations_directory(&args.migrations_directory)?;
 	ensure_migrations_directory(&args.migrations_directory)?;
@@ -398,7 +398,11 @@ fn command_compact(args: &Args) -> Result<()> {
 
 const EXISTS_QUERY: &'static str = "select true from pg_catalog.pg_class where relname = '_schema_versions' and relkind = 'r'";
 
-fn command_migrate(args: &Args, client: &mut postgres::Client, actually_perform_onboard_migrations: bool) -> Result<()> {
+fn command_migrate(
+	args: &Args, client: &mut postgres::Client,
+	actually_perform_onboard_migrations: bool,
+	dry_run: bool,
+) -> Result<()> {
 	let migration_files = gather_validated_migrations(&args)?.0;
 
 	let actual_version: Option<String> = {
@@ -420,6 +424,8 @@ fn command_migrate(args: &Args, client: &mut postgres::Client, actually_perform_
 			.get("current_version")
 	};
 
+	let performing_prefix = if dry_run { "would perform" } else { "performing" };
+
 	for (index, MigrationFile{display_file_path, file_path, current_version, previous_version, is_onboard}) in migration_files.iter().enumerate() {
 		let is_onboard = *is_onboard;
 		if index != 0 && is_onboard {
@@ -427,6 +433,8 @@ fn command_migrate(args: &Args, client: &mut postgres::Client, actually_perform_
 		}
 
 		let mut perform_migration = || -> Result<()> {
+			if dry_run { return Ok(()) }
+
 			if index == 0 {
 				create_versions_table(client)?;
 			}
@@ -449,14 +457,17 @@ fn command_migrate(args: &Args, client: &mut postgres::Client, actually_perform_
 		};
 
 		match actual_version {
-			None => perform_migration()?,
+			None => {
+				println!("{performing_prefix} {}", display_file_path);
+				perform_migration()?
+			},
 			Some(ref actual_version) => {
 				if current_version > actual_version {
-					println!("performing {}", display_file_path);
+					println!("{performing_prefix} {}", display_file_path);
 					perform_migration()?;
 				}
 				else {
-					println!("not performing {}", display_file_path);
+					println!("not {performing_prefix} {}", display_file_path);
 				}
 			},
 		}
@@ -625,6 +636,9 @@ enum Command {
 		/// necessary in dev situations where a clean database needs to have all migrations performed
 		#[clap(long)]
 		actually_perform_onboard_migrations: bool,
+
+		#[clap(long)]
+		dry_run: bool,
 	},
 	/// ensure both database and migrations folder are current with schema
 	/// and compact to only one migration
@@ -664,9 +678,9 @@ fn main() -> Result<()> {
 		Command::Generate{ref migration_description, is_onboard} => {
 			command_generate(&args, &migration_description, is_onboard)?;
 		},
-		Command::Migrate {actually_perform_onboard_migrations} => {
+		Command::Migrate {actually_perform_onboard_migrations, dry_run} => {
 			let mut client = args.pg_url.connect(postgres::NoTls)?;
-			command_migrate(&args, &mut client, actually_perform_onboard_migrations)?;
+			command_migrate(&args, &mut client, actually_perform_onboard_migrations, dry_run)?;
 		},
 		Command::Compact => {
 			command_compact(&args)?;
@@ -728,13 +742,13 @@ fn test_full_no_onboard() -> Result<()> {
 	let migration = &gather_validated_migrations(&get_args(""))?.0[0];
 	assert!(!migration.is_onboard);
 	assert!(migration.previous_version == get_null_string());
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false)?;
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
 	// # schema.2
 	command_generate(&get_args("schemas/schema.2"), "two", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false)?;
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false, false)?;
 	client.batch_execute("select id, name, flavor from fruit")?;
 
 	// # schema.3
@@ -745,7 +759,7 @@ fn test_full_no_onboard() -> Result<()> {
 	// # schema.1
 	command_generate(&get_args("schemas/schema.1"), "back to one", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false)?;
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
 	command_clean(get_config())?;
@@ -806,7 +820,7 @@ fn test_full_with_onboard() -> Result<()> {
 	// manually apply the schema
 	apply_sql_files(&get_config(), vec![PathBuf::from("schemas/schema.1/schema.sql")])?;
 	// apply migrations, which should work
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false)?;
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 	// check diff is clean
 	assert!(command_check(&get_args("schemas/schema.1"), Database, Migrations).is_ok());
@@ -817,7 +831,7 @@ fn test_full_with_onboard() -> Result<()> {
 	// # schema.2
 	command_generate(&get_args("schemas/schema.2"), "two", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false)?;
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false, false)?;
 	client.batch_execute("select id, name, flavor from fruit")?;
 
 	// # schema.3
@@ -828,7 +842,7 @@ fn test_full_with_onboard() -> Result<()> {
 	// # schema.1
 	command_generate(&get_args("schemas/schema.1"), "back to one", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false)?;
+	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
 	command_clean(get_config())?;

@@ -25,6 +25,7 @@ compose_test:
 	set -euo pipefail
 	docker exec -it -u $(id -u ${USER}):$(id -g ${USER}) postgres_migrator postgres_migrator migrate
 	docker exec -it -u $(id -u ${USER}):$(id -g ${USER}) postgres_migrator postgres_migrator --schema-directory schemas/schema.1 diff schema migrations
+	docker exec -it -u $(id -u ${USER}):$(id -g ${USER}) postgres_migrator postgres_migrator --schema-directory schemas/schema.1 migrate --dry-run --actually-perform-onboard-migrations
 
 _status_clean:
 	#!/usr/bin/env bash
