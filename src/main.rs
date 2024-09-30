@@ -325,10 +325,26 @@ fn gather_validated_migrations(args: &Args) -> Result<(Vec<MigrationFile>, Optio
 }
 
 
-fn compute_diff(source: &Config, target: &Config) -> Result<String> {
-	let output = std::process::Command::new("migra")
-		.arg("--unsafe")
-		.arg("--with-privileges")
+#[derive(Debug)]
+enum SchemaArg {
+	OnlySchema(String),
+	ExcludeSchema(String),
+}
+
+fn compute_diff(source: &Config, target: &Config, exclude_privileges: bool, schema_arg: &Option<SchemaArg>) -> Result<String> {
+	let mut cmd = std::process::Command::new("migra");
+	cmd.arg("--unsafe");
+
+	if !exclude_privileges {
+		cmd.arg("--with-privileges");
+	}
+	match schema_arg {
+		None => {},
+		Some(SchemaArg::OnlySchema(schema)) => { cmd.arg("--schema").arg(schema); },
+		Some(SchemaArg::ExcludeSchema(exclude_schema)) => { cmd.arg("--exclude_schema").arg(exclude_schema); },
+	};
+
+	let output = cmd
 		.arg(to_connection_string(source))
 		.arg(to_connection_string(target))
 		.output()
@@ -355,7 +371,7 @@ fn apply_sql_files(config: &Config, sql_files: Vec<PathBuf>) -> Result<()> {
 
 
 fn command_generate(args: &Args, raw_description: &str, is_onboard: bool) -> Result<String> {
-	let dbname = args.pg_url.get_dbname().ok_or(anyhow!("need a dbname to run generate command"))?;
+	let dbname = args.pg_url.get_dbname().ok_or_else(|| anyhow!("need a dbname to run generate command"))?;
 	let (migration_files, previous_version) = gather_validated_migrations(&args)?;
 	if is_onboard && previous_version.is_some() {
 		return Err(anyhow!("can't generate an onboard migration when there are already migrations"));
@@ -370,7 +386,7 @@ fn command_generate(args: &Args, raw_description: &str, is_onboard: bool) -> Res
 	let target = TempDb::new(&dbname, "schema", &args.pg_url)?;
 	apply_sql_files(&target.config, list_sql_files(&args.schema_directory)?)?;
 
-	let generated_migration = compute_diff(&source.config, &target.config)?;
+	let generated_migration = compute_diff(&source.config, &target.config, args.exclude_privileges, &args.schema_arg)?;
 
 	fs::File::create(format!("./{}/{current_version}.{previous_version}.{description_slug}.sql", args.migrations_directory))?
 		.write_all(generated_migration.as_bytes())?;
@@ -410,11 +426,11 @@ fn command_migrate(
 		transaction.execute(&format!(r#"
 			create function pg_temp.current_schema_version() returns setof char(14) as $$
 			begin
-			  if ({EXISTS_QUERY}) then
-			    return query select max(current_version) from _schema_versions;
-			  else
-			    return query select null::char(14);
-			  end if;
+				if ({EXISTS_QUERY}) then
+					return query select max(current_version) from _schema_versions;
+				else
+					return query select null::char(14);
+				end if;
 			end;
 			$$ language plpgsql;
 		"#), &[])?;
@@ -545,7 +561,7 @@ fn compute_backend_diff(args: &Args, source: Backend, target: Backend) -> Result
 	let dbname = args.pg_url.get_dbname().ok_or(anyhow!("provided pg_url has no dbname"))?;
 	let source = ensure_db(args, dbname, &args.pg_url, source, need_version_table)?;
 	let target = ensure_db(args, dbname, &args.pg_url, target, need_version_table)?;
-	Ok(compute_diff(&source.1, &target.1)?)
+	Ok(compute_diff(&source.1, &target.1, args.exclude_privileges, &args.schema_arg)?)
 }
 
 fn command_diff(args: &Args, source: Backend, target: Backend) -> Result<()> {
@@ -603,11 +619,26 @@ use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[clap(author, version)]
-struct Args {
+struct RawArgs {
 	/// postgres connection string, in the form postgres://user:password@host:port/database
 	/// can also be loaded from the environment variable PG_URL
 	#[clap(long, env = "PG_URL", parse(try_from_str = config_try_from_str))]
 	pg_url: Config,
+
+	/// opposite of migra [`--with-privileges`](https://github.com/djrobstep/migra/blob/master/docs/options.md#--with-privileges)
+	#[clap(long)]
+	exclude_privileges: bool,
+
+	/// pass-through of migra [`--schema [SCHEMA_NAME]`](https://github.com/djrobstep/migra/blob/master/docs/options.md#--schema-schema_name)
+	#[clap(long)]
+	schema: Option<String>,
+
+	/// pass-through of migra [`--exclude_schema [SCHEMA_NAME]`](https://github.com/djrobstep/migra/blob/master/docs/options.md#--exclude_schema-schema_name)
+	#[clap(long)]
+	exclude_schema: Option<String>,
+
+	// #[clap(flatten)]
+	// schema_arg: Option<SchemaArg>,
 
 	/// directory where the declarative schema is located
 	#[clap(long, default_value_t = String::from(DEFAULT_SCHEMA_DIRECTORY))]
@@ -618,6 +649,38 @@ struct Args {
 
 	#[clap(subcommand)]
 	command: Command,
+}
+
+#[derive(Debug)]
+struct Args {
+	pg_url: Config,
+	exclude_privileges: bool,
+	schema_arg: Option<SchemaArg>,
+	schema_directory: String,
+	migrations_directory: String,
+	command: Command,
+}
+
+impl Args {
+	fn from_raw_args(raw_args: RawArgs) -> Result<Args> {
+		let RawArgs{pg_url, exclude_privileges, schema, exclude_schema, schema_directory, migrations_directory, command} = raw_args;
+
+		let schema_arg = match (schema, exclude_schema) {
+			(Some(schema), Some(exclude_schema)) => {
+				return Err(anyhow!("can't set both schema and exclude-schema (schema={schema}, exclude-schema={exclude_schema})"));
+			},
+			(Some(schema), None) => Some(SchemaArg::OnlySchema(schema)),
+			(None, Some(exclude_schema)) => Some(SchemaArg::ExcludeSchema(exclude_schema)),
+			(None, None) => None,
+		};
+
+		Ok(Args {
+			pg_url, exclude_privileges,
+			schema_directory, migrations_directory,
+			schema_arg,
+			command,
+		})
+	}
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -672,7 +735,7 @@ enum Backend {
 
 
 fn main() -> Result<()> {
-	let args = Args::parse();
+	let args = Args::from_raw_args(RawArgs::parse())?;
 
 	match args.command {
 		Command::Generate{ref migration_description, is_onboard} => {
@@ -712,6 +775,8 @@ fn test_full_no_onboard() -> Result<()> {
 			schema_directory: schema_directory.to_string(),
 			migrations_directory: DEFAULT_MIGRATIONS_DIRECTORY.to_string(),
 			command: Command::Clean,
+			exclude_privileges: false,
+			schema_arg: None,
 		}
 	}
 
@@ -786,6 +851,8 @@ fn test_full_with_onboard() -> Result<()> {
 			schema_directory: schema_directory.to_string(),
 			migrations_directory: DEFAULT_MIGRATIONS_DIRECTORY.to_string(),
 			command: Command::Clean,
+			exclude_privileges: false,
+			schema_arg: None,
 		}
 	}
 
