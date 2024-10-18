@@ -46,6 +46,15 @@ create table fruit (
 
 Then running `postgres_migrator generate 'remove color add flavor'` will generate `$new_version.$previous_version.remove_color_add_flavor.sql` that will go from the previous state to the new state.
 
+### Running PostgreSQL migration outside of a transaction
+You can add any type of SQL that is supported by PostgreSQL. But for operations that have to run outside of a transaction, refer to the SQLx feature like "explained" in the code [here](https://github.com/launchbadge/sqlx/blob/main/sqlx-core/src/migrate/source.rs#L126-L127).
+For example, to create a specific type of index concurrently
+
+```sql
+-- no-transaction
+create index concurrently idx_flavor_created_at_desc on fruit (flavor, created_at desc);
+```
+
 # Usage
 
 First, place your declarative sql files in the `schema` directory and create a directory for migrations called `migrations`. You can customize these with `--schema-directory` and `--migrations-directory`.
