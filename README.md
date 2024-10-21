@@ -50,6 +50,8 @@ Then running `postgres_migrator generate 'remove color add flavor'` will generat
 
 First, place your declarative sql files in the `schema` directory and create a directory for migrations called `migrations`. You can customize these with `--schema-directory` and `--migrations-directory`.
 
+You can put any valid sql in the `migrations` files, you don't have to accept the automatically generated sql as is. All this tool cares about is the difference between the final sql objects created by sql in the `schema` and `migrations` directories, [and however you achieve that is up to you!](https://github.com/blainehansen/postgres_migrator/issues/4)
+
 ## As a standalone docker image
 
 `postgres_migrator` is distributed as a docker image, `blainehansen/postgres_migrator`. You can run it using `docker run`, and since the cli needs to interact with a postgres database, read schema files, and read/write migration files, it needs quite a few options:
