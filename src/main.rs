@@ -16,11 +16,11 @@ fn get_null_string() -> String {
 	"null".to_string()
 }
 
-fn ensure_migrations_directory(migrations_directory: &str) -> io::Result<()> {
+fn ensure_directory(migrations_directory: &str) -> io::Result<()> {
 	fs::create_dir_all(migrations_directory)
 }
 
-fn purge_migrations_directory(migrations_directory: &str) -> io::Result<()> {
+fn purge_directory(migrations_directory: &str) -> io::Result<()> {
 	let migrations_directory = PathBuf::from(migrations_directory);
 	match migrations_directory.exists() {
 		true => fs::remove_dir_all(migrations_directory),
@@ -33,14 +33,14 @@ const DEFAULT_SCHEMA_DIRECTORY: &'static str = "schema";
 
 #[test]
 #[serial_test::serial]
-fn test_ensure_migrations_directory() -> io::Result<()> {
-	purge_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
-	ensure_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
-	ensure_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
-	purge_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
-	purge_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
-	ensure_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
-	ensure_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+fn test_ensure_directory() -> io::Result<()> {
+	purge_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	ensure_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	ensure_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	purge_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	purge_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	ensure_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	ensure_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
 	Ok(())
 }
 
@@ -76,8 +76,8 @@ fn list_sql_files(directory: &str) -> io::Result<Vec<PathBuf>> {
 #[test]
 #[serial_test::serial]
 fn test_list_sql_files() -> io::Result<()> {
-	purge_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
-	ensure_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	purge_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	ensure_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
 
 	fs::File::create("migrations/30_yo.sql")?;
 	fs::File::create("migrations/10_yo.sql")?;
@@ -94,10 +94,57 @@ fn test_list_sql_files() -> io::Result<()> {
 		PathBuf::from("migrations/30_yo.sql"),
 	]);
 
-	purge_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	purge_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
 	Ok(())
 }
 
+#[test]
+#[serial_test::serial]
+fn test_list_sql_files_nested_schema() -> io::Result<()> {
+    use pretty_assertions::assert_eq;
+
+    purge_directory(&DEFAULT_SCHEMA_DIRECTORY)?;
+    ensure_directory(&DEFAULT_SCHEMA_DIRECTORY)?;
+
+    fs::File::create("schema/README")?;
+    fs::File::create("schema/00_types.sql")?;
+    fs::create_dir("schema/01_tables")?;
+    fs::File::create("schema/01_tables/00_foo.sql")?;
+    fs::create_dir("schema/01_tables/01_bar_tables")?;
+    fs::File::create("schema/01_tables/01_bar_tables/README")?;
+    fs::File::create("schema/01_tables/01_bar_tables/bar_0.sql")?;
+    fs::File::create("schema/01_tables/01_bar_tables/bar_1.sql")?;
+    fs::create_dir("schema/02_functions")?;
+    fs::File::create("schema/02_functions/00_common.sql")?;
+    fs::create_dir("schema/02_functions/01_bar_functions")?;
+    fs::File::create("schema/02_functions/01_bar_functions/00_get_bar.sql")?;
+    fs::File::create("schema/02_functions/01_bar_functions/01_aggregate_bar.sql")?;
+    fs::create_dir("schema/02_functions/02_foo_functions")?;
+    fs::File::create("schema/02_functions/02_foo_functions/README")?;
+    fs::File::create("schema/02_functions/02_foo_functions/00_get_foo.sql")?;
+    fs::File::create("schema/02_functions/02_foo_functions/01_aggregate_foo.sql")?;
+    fs::File::create("schema/03_indexes.sql")?;
+
+    let schema_files = list_sql_files(&DEFAULT_SCHEMA_DIRECTORY)?;
+    assert_eq!(
+        schema_files,
+        vec![
+            PathBuf::from("schema/00_types.sql"),
+            PathBuf::from("schema/01_tables/00_foo.sql"),
+            PathBuf::from("schema/01_tables/01_bar_tables/bar_0.sql"),
+            PathBuf::from("schema/01_tables/01_bar_tables/bar_1.sql"),
+            PathBuf::from("schema/02_functions/00_common.sql"),
+            PathBuf::from("schema/02_functions/01_bar_functions/00_get_bar.sql"),
+            PathBuf::from("schema/02_functions/01_bar_functions/01_aggregate_bar.sql"),
+            PathBuf::from("schema/02_functions/02_foo_functions/00_get_foo.sql"),
+            PathBuf::from("schema/02_functions/02_foo_functions/01_aggregate_foo.sql"),
+            PathBuf::from("schema/03_indexes.sql"),
+        ]
+    );
+
+    purge_directory(&DEFAULT_SCHEMA_DIRECTORY)?;
+    Ok(())
+}
 
 #[derive(Debug, Eq, PartialEq)]
 struct MigrationFile {
@@ -315,7 +362,7 @@ fn test_config_try_from_str() {
 fn gather_validated_migrations(args: &Args) -> Result<(Vec<MigrationFile>, Option<String>)> {
 	// TODO use client to grab existing migrations and check them against the directory?
 
-	ensure_migrations_directory(&args.migrations_directory)?;
+	ensure_directory(&args.migrations_directory)?;
 	let migration_files = MigrationFile::vec_from_paths(list_sql_files(&args.migrations_directory)?)?;
 
 	let current_version = migration_files.last().map(|migration_file| migration_file.current_version.clone());
@@ -399,8 +446,8 @@ fn command_compact(args: &Args) -> Result<()> {
 	command_generate(args, "ensuring_current", false)?;
 	command_migrate(args, &mut client, false, false)?;
 
-	purge_migrations_directory(&args.migrations_directory)?;
-	ensure_migrations_directory(&args.migrations_directory)?;
+	purge_directory(&args.migrations_directory)?;
+	ensure_directory(&args.migrations_directory)?;
 	let current_version = command_generate(args, "compacted_initial", false)?;
 	println!("new version number is: {current_version}");
 
@@ -791,8 +838,8 @@ fn test_full_no_onboard() -> Result<()> {
 		grant all on schema public to public;
 		comment on schema public is 'standard public schema';
 	")?;
-	purge_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
-	ensure_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	purge_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	ensure_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
 
 	use Backend::*;
 	assert!(command_check(&get_args("schemas/schema.1"), Database, Migrations).is_ok());
@@ -867,8 +914,8 @@ fn test_full_with_onboard() -> Result<()> {
 		grant all on schema public to public;
 		comment on schema public is 'standard public schema';
 	")?;
-	purge_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
-	ensure_migrations_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	purge_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
+	ensure_directory(DEFAULT_MIGRATIONS_DIRECTORY)?;
 
 	use Backend::*;
 	assert!(command_check(&get_args("schemas/schema.1"), Database, Migrations).is_ok());
