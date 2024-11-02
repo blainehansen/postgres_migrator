@@ -18,6 +18,7 @@ chrono = "0.4"
 regex = "1"
 anyhow = "1.0"
 clap = { version = "3", features = ["derive", "env"] }
+walkdir = "2.5"
 
 [dev-dependencies]
 serial_test = "0.8"

@@ -60,18 +60,17 @@ fn test_make_slug() {
 
 
 fn list_sql_files(directory: &str) -> io::Result<Vec<PathBuf>> {
-	let mut entries = vec![];
-	let sql_extension = Some(std::ffi::OsStr::new("sql"));
+    let mut entries = vec![];
+    let sql_extension = Some(std::ffi::OsStr::new("sql"));
 
-	for entry in fs::read_dir(directory)? {
-		let entry = entry?;
-		let path = entry.path();
-		if !path.is_dir() && path.extension() == sql_extension {
-			entries.push(path);
-		}
-	}
-	entries.sort();
-	Ok(entries)
+    for entry in WalkDir::new(directory) {
+        let path = entry?.into_path();
+        if !path.is_dir() && path.extension() == sql_extension {
+            entries.push(path);
+        }
+    }
+    entries.sort();
+    Ok(entries)
 }
 
 #[test]
@@ -616,6 +615,7 @@ impl Drop for TempDb {
 }
 
 use clap::Parser;
+use walkdir::WalkDir;
 
 #[derive(Parser, Debug)]
 #[clap(author, version)]
