@@ -16,14 +16,14 @@ fn get_null_string() -> String {
 	"null".to_string()
 }
 
-fn ensure_directory(migrations_directory: &str) -> io::Result<()> {
-	fs::create_dir_all(migrations_directory)
+fn ensure_directory(directory: &str) -> io::Result<()> {
+	fs::create_dir_all(directory)
 }
 
-fn purge_directory(migrations_directory: &str) -> io::Result<()> {
-	let migrations_directory = PathBuf::from(migrations_directory);
-	match migrations_directory.exists() {
-		true => fs::remove_dir_all(migrations_directory),
+fn purge_directory(directory: &str) -> io::Result<()> {
+	let directory = PathBuf::from(directory);
+	match directory.exists() {
+		true => fs::remove_dir_all(directory),
 		false => Ok(()),
 	}
 }
