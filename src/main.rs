@@ -107,37 +107,37 @@ fn test_list_sql_files_nested_schema() -> io::Result<()> {
 	ensure_directory(&DEFAULT_SCHEMA_DIRECTORY)?;
 
 	fs::File::create("schema/README")?;
-	fs::File::create("schema/00_types.sql")?;
+	fs::File::create("schema/00_base.sql")?;
 	fs::create_dir("schema/01_tables")?;
-	fs::File::create("schema/01_tables/00_foo.sql")?;
-	fs::create_dir("schema/01_tables/01_bar_tables")?;
-	fs::File::create("schema/01_tables/01_bar_tables/README")?;
-	fs::File::create("schema/01_tables/01_bar_tables/bar_0.sql")?;
-	fs::File::create("schema/01_tables/01_bar_tables/bar_1.sql")?;
+	fs::File::create("schema/01_tables/00_tables.sql")?;
+	fs::create_dir("schema/01_tables/01_tables")?;
+	fs::File::create("schema/01_tables/01_tables/README")?;
+	fs::File::create("schema/01_tables/01_tables/00_tables.sql")?;
+	fs::File::create("schema/01_tables/01_tables/01_tables.sql")?;
 	fs::create_dir("schema/02_functions")?;
-	fs::File::create("schema/02_functions/00_common.sql")?;
-	fs::create_dir("schema/02_functions/01_bar_functions")?;
-	fs::File::create("schema/02_functions/01_bar_functions/00_get_bar.sql")?;
-	fs::File::create("schema/02_functions/01_bar_functions/01_aggregate_bar.sql")?;
-	fs::create_dir("schema/02_functions/02_foo_functions")?;
-	fs::File::create("schema/02_functions/02_foo_functions/README")?;
-	fs::File::create("schema/02_functions/02_foo_functions/00_get_foo.sql")?;
-	fs::File::create("schema/02_functions/02_foo_functions/01_aggregate_foo.sql")?;
+	fs::File::create("schema/02_functions/00_functions.sql")?;
+	fs::create_dir("schema/02_functions/01_functions")?;
+	fs::File::create("schema/02_functions/01_functions/00_functions.sql")?;
+	fs::File::create("schema/02_functions/01_functions/01_functions.sql")?;
+	fs::create_dir("schema/02_functions/02_functions")?;
+	fs::File::create("schema/02_functions/02_functions/README")?;
+	fs::File::create("schema/02_functions/02_functions/00_functions.sql")?;
+	fs::File::create("schema/02_functions/02_functions/01_functions.sql")?;
 	fs::File::create("schema/03_indexes.sql")?;
 
 	let schema_files = list_sql_files(&DEFAULT_SCHEMA_DIRECTORY)?;
 	assert_eq!(
 		schema_files,
 		vec![
-			PathBuf::from("schema/00_types.sql"),
-			PathBuf::from("schema/01_tables/00_foo.sql"),
-			PathBuf::from("schema/01_tables/01_bar_tables/bar_0.sql"),
-			PathBuf::from("schema/01_tables/01_bar_tables/bar_1.sql"),
-			PathBuf::from("schema/02_functions/00_common.sql"),
-			PathBuf::from("schema/02_functions/01_bar_functions/00_get_bar.sql"),
-			PathBuf::from("schema/02_functions/01_bar_functions/01_aggregate_bar.sql"),
-			PathBuf::from("schema/02_functions/02_foo_functions/00_get_foo.sql"),
-			PathBuf::from("schema/02_functions/02_foo_functions/01_aggregate_foo.sql"),
+			PathBuf::from("schema/00_base.sql"),
+			PathBuf::from("schema/01_tables/00_tables.sql"),
+			PathBuf::from("schema/01_tables/01_tables/00_tables.sql"),
+			PathBuf::from("schema/01_tables/01_tables/01_tables.sql"),
+			PathBuf::from("schema/02_functions/00_functions.sql"),
+			PathBuf::from("schema/02_functions/01_functions/00_functions.sql"),
+			PathBuf::from("schema/02_functions/01_functions/01_functions.sql"),
+			PathBuf::from("schema/02_functions/02_functions/00_functions.sql"),
+			PathBuf::from("schema/02_functions/02_functions/01_functions.sql"),
 			PathBuf::from("schema/03_indexes.sql"),
 		]
 	);
