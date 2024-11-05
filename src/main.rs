@@ -60,17 +60,17 @@ fn test_make_slug() {
 
 
 fn list_sql_files(directory: &str) -> io::Result<Vec<PathBuf>> {
-    let mut entries = vec![];
-    let sql_extension = Some(std::ffi::OsStr::new("sql"));
+	let mut entries = vec![];
+	let sql_extension = Some(std::ffi::OsStr::new("sql"));
 
-    for entry in WalkDir::new(directory) {
-        let path = entry?.into_path();
-        if !path.is_dir() && path.extension() == sql_extension {
-            entries.push(path);
-        }
-    }
-    entries.sort();
-    Ok(entries)
+	for entry in WalkDir::new(directory) {
+		let path = entry?.into_path();
+		if !path.is_dir() && path.extension() == sql_extension {
+			entries.push(path);
+		}
+	}
+	entries.sort();
+	Ok(entries)
 }
 
 #[test]
@@ -101,49 +101,49 @@ fn test_list_sql_files() -> io::Result<()> {
 #[test]
 #[serial_test::serial]
 fn test_list_sql_files_nested_schema() -> io::Result<()> {
-    use pretty_assertions::assert_eq;
+	use pretty_assertions::assert_eq;
 
-    purge_directory(&DEFAULT_SCHEMA_DIRECTORY)?;
-    ensure_directory(&DEFAULT_SCHEMA_DIRECTORY)?;
+	purge_directory(&DEFAULT_SCHEMA_DIRECTORY)?;
+	ensure_directory(&DEFAULT_SCHEMA_DIRECTORY)?;
 
-    fs::File::create("schema/README")?;
-    fs::File::create("schema/00_types.sql")?;
-    fs::create_dir("schema/01_tables")?;
-    fs::File::create("schema/01_tables/00_foo.sql")?;
-    fs::create_dir("schema/01_tables/01_bar_tables")?;
-    fs::File::create("schema/01_tables/01_bar_tables/README")?;
-    fs::File::create("schema/01_tables/01_bar_tables/bar_0.sql")?;
-    fs::File::create("schema/01_tables/01_bar_tables/bar_1.sql")?;
-    fs::create_dir("schema/02_functions")?;
-    fs::File::create("schema/02_functions/00_common.sql")?;
-    fs::create_dir("schema/02_functions/01_bar_functions")?;
-    fs::File::create("schema/02_functions/01_bar_functions/00_get_bar.sql")?;
-    fs::File::create("schema/02_functions/01_bar_functions/01_aggregate_bar.sql")?;
-    fs::create_dir("schema/02_functions/02_foo_functions")?;
-    fs::File::create("schema/02_functions/02_foo_functions/README")?;
-    fs::File::create("schema/02_functions/02_foo_functions/00_get_foo.sql")?;
-    fs::File::create("schema/02_functions/02_foo_functions/01_aggregate_foo.sql")?;
-    fs::File::create("schema/03_indexes.sql")?;
+	fs::File::create("schema/README")?;
+	fs::File::create("schema/00_types.sql")?;
+	fs::create_dir("schema/01_tables")?;
+	fs::File::create("schema/01_tables/00_foo.sql")?;
+	fs::create_dir("schema/01_tables/01_bar_tables")?;
+	fs::File::create("schema/01_tables/01_bar_tables/README")?;
+	fs::File::create("schema/01_tables/01_bar_tables/bar_0.sql")?;
+	fs::File::create("schema/01_tables/01_bar_tables/bar_1.sql")?;
+	fs::create_dir("schema/02_functions")?;
+	fs::File::create("schema/02_functions/00_common.sql")?;
+	fs::create_dir("schema/02_functions/01_bar_functions")?;
+	fs::File::create("schema/02_functions/01_bar_functions/00_get_bar.sql")?;
+	fs::File::create("schema/02_functions/01_bar_functions/01_aggregate_bar.sql")?;
+	fs::create_dir("schema/02_functions/02_foo_functions")?;
+	fs::File::create("schema/02_functions/02_foo_functions/README")?;
+	fs::File::create("schema/02_functions/02_foo_functions/00_get_foo.sql")?;
+	fs::File::create("schema/02_functions/02_foo_functions/01_aggregate_foo.sql")?;
+	fs::File::create("schema/03_indexes.sql")?;
 
-    let schema_files = list_sql_files(&DEFAULT_SCHEMA_DIRECTORY)?;
-    assert_eq!(
-        schema_files,
-        vec![
-            PathBuf::from("schema/00_types.sql"),
-            PathBuf::from("schema/01_tables/00_foo.sql"),
-            PathBuf::from("schema/01_tables/01_bar_tables/bar_0.sql"),
-            PathBuf::from("schema/01_tables/01_bar_tables/bar_1.sql"),
-            PathBuf::from("schema/02_functions/00_common.sql"),
-            PathBuf::from("schema/02_functions/01_bar_functions/00_get_bar.sql"),
-            PathBuf::from("schema/02_functions/01_bar_functions/01_aggregate_bar.sql"),
-            PathBuf::from("schema/02_functions/02_foo_functions/00_get_foo.sql"),
-            PathBuf::from("schema/02_functions/02_foo_functions/01_aggregate_foo.sql"),
-            PathBuf::from("schema/03_indexes.sql"),
-        ]
-    );
+	let schema_files = list_sql_files(&DEFAULT_SCHEMA_DIRECTORY)?;
+	assert_eq!(
+		schema_files,
+		vec![
+			PathBuf::from("schema/00_types.sql"),
+			PathBuf::from("schema/01_tables/00_foo.sql"),
+			PathBuf::from("schema/01_tables/01_bar_tables/bar_0.sql"),
+			PathBuf::from("schema/01_tables/01_bar_tables/bar_1.sql"),
+			PathBuf::from("schema/02_functions/00_common.sql"),
+			PathBuf::from("schema/02_functions/01_bar_functions/00_get_bar.sql"),
+			PathBuf::from("schema/02_functions/01_bar_functions/01_aggregate_bar.sql"),
+			PathBuf::from("schema/02_functions/02_foo_functions/00_get_foo.sql"),
+			PathBuf::from("schema/02_functions/02_foo_functions/01_aggregate_foo.sql"),
+			PathBuf::from("schema/03_indexes.sql"),
+		]
+	);
 
-    purge_directory(&DEFAULT_SCHEMA_DIRECTORY)?;
-    Ok(())
+	purge_directory(&DEFAULT_SCHEMA_DIRECTORY)?;
+	Ok(())
 }
 
 #[derive(Debug, Eq, PartialEq)]
