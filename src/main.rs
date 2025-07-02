@@ -23,12 +23,10 @@ fn make_tls_connector() -> Result<MakeTlsConnector> {
 }
 
 fn connect_database(config: &Config) -> Result<postgres::Client> {
-	// First try with NoTls - this handles sslmode=disable and sslmode=prefer (when server doesn't require SSL)
+	// Try non-SSL first for backward compatibility
 	match config.connect(postgres::NoTls) {
 		Ok(client) => Ok(client),
 		Err(_) => {
-			// If NoTls fails, try with TLS
-			// This handles sslmode=require, sslmode=verify-ca, sslmode=verify-full
 			let tls = make_tls_connector()?;
 			config.connect(tls).context("Failed to connect to database")
 		}
@@ -50,12 +48,10 @@ fn test_ssl_connections() -> Result<()> {
 	);
 	let config: Config = non_ssl_url.parse()?;
 	
-	// This should work with NoTls on the first try
 	let client = connect_database(&config);
 	assert!(client.is_ok(), "Non-SSL connection should succeed");
 	
 	// Test 2: Connection with sslmode=prefer (default PostgreSQL behavior)
-	// This should try NoTls first, and only fall back to TLS if server requires it
 	let prefer_url = non_ssl_url.replace("sslmode=disable", "sslmode=prefer");
 	let config: Config = prefer_url.parse()?;
 	let client = connect_database(&config);
@@ -70,7 +66,6 @@ fn test_ssl_connections() -> Result<()> {
 
 #[test]
 fn test_make_tls_connector() {
-	// Test that we can create a TLS connector with our settings
 	let connector = make_tls_connector();
 	assert!(connector.is_ok(), "Should be able to create TLS connector");
 }
