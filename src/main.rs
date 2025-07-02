@@ -76,6 +76,21 @@ fn test_make_tls_connector() {
 	assert!(connector.is_ok(), "Should be able to create TLS connector");
 }
 
+#[test]
+fn test_connection_error_handling() {
+	// Test with an invalid connection string that will fail both SSL and non-SSL
+	let invalid_config: Config = "postgres://invalid:invalid@nonexistent:5432/invalid".parse().unwrap();
+	let result = connect_database(&invalid_config);
+	assert!(result.is_err(), "Should fail when both SSL and non-SSL connections fail");
+	
+	// Verify the error message indicates connection failure
+	if let Err(e) = result {
+		let error_msg = e.to_string();
+		assert!(error_msg.contains("Failed to connect to database"), 
+			"Error should indicate connection failure, got: {}", error_msg);
+	}
+}
+
 fn get_null_string() -> String {
 	"null".to_string()
 }
