@@ -16,6 +16,10 @@
 - Allow running migrations only up to a certain version. `postgres_migrator` will always apply all available unapplied migrations. If you don't want to apply some migrations, move them to a different folder or change their extension to something other than `.sql`.
 - Figure out database diffs itself, but instead uses the well-establised [`migra`](https://github.com/djrobstep/migra) under the hood.
 
+## SSL/TLS Support
+
+`postgres_migrator` automatically handles SSL connections when required by your PostgreSQL server. It maintains backward compatibility by attempting non-SSL connections first, then falling back to SSL if needed (with self-signed certificates accepted).
+
 # Example
 
 If your `schema` directory contains a sql file like this:
