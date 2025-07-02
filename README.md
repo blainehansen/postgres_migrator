@@ -18,7 +18,7 @@
 
 ## SSL/TLS Support
 
-`postgres_migrator` automatically handles SSL connections when required by your PostgreSQL server. It maintains backward compatibility by attempting non-SSL connections first, then falling back to SSL if needed (with self-signed certificates accepted).
+`postgres_migrator` automatically handles SSL connections, attempting SSL first (matching PostgreSQL's default behavior), then falling back to non-SSL if needed. Self-signed certificates are accepted for compatibility with cloud providers.
 
 # Example
 

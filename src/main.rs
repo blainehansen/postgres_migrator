@@ -23,12 +23,18 @@ fn make_tls_connector() -> Result<MakeTlsConnector> {
 }
 
 fn connect_database(config: &Config) -> Result<postgres::Client> {
-	// Try non-SSL first for backward compatibility
-	match config.connect(postgres::NoTls) {
-		Ok(client) => Ok(client),
+	// Try SSL first (matching PostgreSQL's default sslmode=prefer behavior)
+	match make_tls_connector() {
+		Ok(tls) => match config.connect(tls) {
+			Ok(client) => Ok(client),
+			Err(_) => {
+				// Fall back to non-SSL if SSL fails
+				config.connect(postgres::NoTls).context("Failed to connect to database")
+			}
+		},
 		Err(_) => {
-			let tls = make_tls_connector()?;
-			config.connect(tls).context("Failed to connect to database")
+			// If we can't create TLS connector, try non-SSL
+			config.connect(postgres::NoTls).context("Failed to connect to database")
 		}
 	}
 }
