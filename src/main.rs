@@ -777,8 +777,10 @@ struct Args {
 
 impl Args {
 	fn from_raw_args(raw_args: RawArgs) -> Result<Args> {
-		let RawArgs{pg_url, exclude_privileges, schema, exclude_schema, schema_directory, migrations_directory, 
-			tls, tls_ca_cert, tls_accept_invalid_certs, tls_accept_invalid_hostnames, command} = raw_args;
+		let RawArgs {
+			pg_url, exclude_privileges, schema, exclude_schema, schema_directory, migrations_directory, 
+			tls, tls_ca_cert, tls_accept_invalid_certs, tls_accept_invalid_hostnames, command,
+		} = raw_args;
 
 		let schema_arg = match (schema, exclude_schema) {
 			(Some(schema), Some(exclude_schema)) => {
