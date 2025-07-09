@@ -16,10 +16,6 @@
 - Allow running migrations only up to a certain version. `postgres_migrator` will always apply all available unapplied migrations. If you don't want to apply some migrations, move them to a different folder or change their extension to something other than `.sql`.
 - Figure out database diffs itself, but instead uses the well-establised [`migra`](https://github.com/djrobstep/migra) under the hood.
 
-## SSL/TLS Support
-
-`postgres_migrator` automatically handles SSL connections, attempting SSL first (matching PostgreSQL's default behavior), then falling back to non-SSL if needed. Self-signed certificates are accepted for compatibility with cloud providers.
-
 # Example
 
 If your `schema` directory contains a sql file like this:
@@ -59,7 +55,6 @@ You can put any valid sql in the `migrations` files, you don't have to accept th
 ## As a standalone docker image
 
 `postgres_migrator` is distributed as a docker image, `blainehansen/postgres_migrator`. You can run it using `docker run`, and since the cli needs to interact with a postgres database, read schema files, and read/write migration files, it needs quite a few options:
-
 
 ```bash
 docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working blainehansen/postgres_migrator <args>
@@ -149,6 +144,18 @@ OPTIONS:
 
         --schema-directory <SCHEMA_DIRECTORY>
             directory where the declarative schema is located [default: schema]
+
+        --tls
+            enable TLS/SSL connections
+
+        --tls-accept-invalid-certs
+            accept invalid TLS certificates
+
+        --tls-accept-invalid-hostnames
+            accept invalid hostnames in TLS certificates
+
+        --tls-ca-cert <TLS_CA_CERT>
+            path to CA certificate file for TLS verification
 
     -V, --version
             Print version information

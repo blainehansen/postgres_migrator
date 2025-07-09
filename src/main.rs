@@ -61,13 +61,13 @@ fn test_make_slug() {
 }
 
 
-fn connect_database(config: &Config, tls_config: Option<&TlsConfig>) -> Result<postgres::Client> {
+fn connect_database(config: &Config, tls_config: &Option<TlsConfig>) -> Result<postgres::Client> {
 	match tls_config {
-		Some(tls) if tls.enabled => {
+		Some(tls) => {
 			let tls_connector = make_tls_connector(tls)?;
 			Ok(config.connect(tls_connector)?)
 		}
-		_ => Ok(config.connect(postgres::NoTls)?)
+		None => Ok(config.connect(postgres::NoTls)?)
 	}
 }
 
@@ -416,7 +416,7 @@ fn compute_diff(source: &Config, target: &Config, exclude_privileges: bool, sche
 }
 
 
-fn apply_sql_files(config: &Config, sql_files: Vec<PathBuf>, tls_config: Option<&TlsConfig>) -> Result<()> {
+fn apply_sql_files(config: &Config, sql_files: Vec<PathBuf>, tls_config: &Option<TlsConfig>) -> Result<()> {
 	let mut client = connect_database(config, tls_config)?;
 	for sql_file in sql_files {
 		let mut file = fs::File::open(sql_file)?;
@@ -440,7 +440,7 @@ fn command_generate(args: &Args, raw_description: &str, is_onboard: bool) -> Res
 	let description_slug = make_slug(raw_description);
 	let current_version = create_timestamp();
 
-	let tls_config = Some(&args.tls_config);
+	let tls_config = &args.tls_config;
 	let source = TempDb::new(&dbname, "migrations", &args.pg_url, tls_config)?;
 	apply_sql_files(&source.config, migration_files.into_iter().map(|migration_file| migration_file.file_path).collect(), tls_config)?;
 	let target = TempDb::new(&dbname, "schema", &args.pg_url, tls_config)?;
@@ -456,7 +456,7 @@ fn command_generate(args: &Args, raw_description: &str, is_onboard: bool) -> Res
 
 
 fn command_compact(args: &Args) -> Result<()> {
-	let mut client = connect_database(&args.pg_url, Some(&args.tls_config))?;
+	let mut client = connect_database(&args.pg_url, &args.tls_config)?;
 	command_generate(args, "ensuring_current", false)?;
 	command_migrate(args, &mut client, false, false)?;
 
@@ -552,7 +552,7 @@ fn command_migrate(
 	Ok(())
 }
 
-fn command_clean(mut base_config: Config, tls_config: Option<&TlsConfig>) -> Result<()> {
+fn command_clean(mut base_config: Config, tls_config: &Option<TlsConfig>) -> Result<()> {
 	let mut client = connect_database(&base_config.dbname("template1"), tls_config)?;
 	let query = format!("
 		select databases.datname as dbname
@@ -584,7 +584,7 @@ fn create_versions_table(client: &mut postgres::Client) -> Result<()> {
 }
 
 fn ensure_db(args: &Args, dbname: &str, base_config: &Config, backend: Backend, need_version_table: bool) -> Result<(Option<TempDb>, Config)> {
-	let tls_config = Some(&args.tls_config);
+	let tls_config = &args.tls_config;
 	let do_it = |suffix: &'static str, dir: &str| {
 		let temp = TempDb::new(dbname, suffix, base_config, tls_config)?;
 		if need_version_table {
@@ -613,7 +613,7 @@ fn compute_backend_diff(args: &Args, source: Backend, target: Backend) -> Result
 
 	let need_version_table: bool = match (source, target) {
 		(_, Backend::Database) | (Backend::Database, _) => {
-			let mut client = connect_database(&args.pg_url, Some(&args.tls_config))?;
+			let mut client = connect_database(&args.pg_url, &args.tls_config)?;
 			client.query_one(&format!("select exists ({EXISTS_QUERY}) as table_exists"), &[])?.get("table_exists")
 		},
 		_ => false,
@@ -648,7 +648,7 @@ struct TempDb {
 }
 
 impl TempDb {
-	fn new(dbname: &str, suffix: &str, base_config: &Config, tls_config: Option<&TlsConfig>) -> Result<TempDb> {
+	fn new(dbname: &str, suffix: &str, base_config: &Config, tls_config: &Option<TlsConfig>) -> Result<TempDb> {
 		let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
 		let dbname = format!("{dbname}_{now}_{suffix}");
 
@@ -667,7 +667,7 @@ impl Drop for TempDb {
 	fn drop(&mut self) {
 		let dbname = &self.dbname;
 
-		let _ = connect_database(&self.config.dbname("template1"), None)
+		let _ = connect_database(&self.config.dbname("template1"), &None)
 			.map_err(|err| { eprintln!("unable to drop {dbname}: {err}"); err })
 			.and_then(|mut client| {
 				client.batch_execute(&format!(r#"drop database if exists "{dbname}""#))
@@ -732,9 +732,8 @@ struct RawArgs {
 	command: Command,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct TlsConfig {
-	enabled: bool,
 	ca_cert: Option<PathBuf>,
 	accept_invalid_certs: bool,
 	accept_invalid_hostnames: bool,
@@ -771,7 +770,7 @@ struct Args {
 	schema_arg: Option<SchemaArg>,
 	schema_directory: String,
 	migrations_directory: String,
-	tls_config: TlsConfig,
+	tls_config: Option<TlsConfig>,
 	command: Command,
 }
 
@@ -791,11 +790,14 @@ impl Args {
 			(None, None) => None,
 		};
 
-		let tls_config = TlsConfig {
-			enabled: tls,
-			ca_cert: tls_ca_cert,
-			accept_invalid_certs: tls_accept_invalid_certs,
-			accept_invalid_hostnames: tls_accept_invalid_hostnames,
+		let tls_config = if tls {
+			Some(TlsConfig {
+				ca_cert: tls_ca_cert,
+				accept_invalid_certs: tls_accept_invalid_certs,
+				accept_invalid_hostnames: tls_accept_invalid_hostnames,
+			})
+		} else {
+			None
 		};
 
 		Ok(Args {
@@ -867,7 +869,7 @@ fn main() -> Result<()> {
 			command_generate(&args, &migration_description, is_onboard)?;
 		},
 		Command::Migrate {actually_perform_onboard_migrations, dry_run} => {
-			let mut client = connect_database(&args.pg_url, Some(&args.tls_config))?;
+			let mut client = connect_database(&args.pg_url, &args.tls_config)?;
 			command_migrate(&args, &mut client, actually_perform_onboard_migrations, dry_run)?;
 		},
 		Command::Compact => {
@@ -880,7 +882,7 @@ fn main() -> Result<()> {
 			command_diff(&args, source, target)?;
 		},
 		Command::Clean => {
-			command_clean(args.pg_url, Some(&args.tls_config))?;
+			command_clean(args.pg_url, &args.tls_config)?;
 		},
 	}
 
@@ -902,12 +904,7 @@ fn test_full_no_onboard() -> Result<()> {
 			command: Command::Clean,
 			exclude_privileges: false,
 			schema_arg: None,
-			tls_config: TlsConfig {
-				enabled: false,
-				ca_cert: None,
-				accept_invalid_certs: false,
-				accept_invalid_hostnames: false,
-			},
+			tls_config: None,
 		}
 	}
 
@@ -915,7 +912,7 @@ fn test_full_no_onboard() -> Result<()> {
 		list_sql_files(DEFAULT_MIGRATIONS_DIRECTORY).unwrap().len()
 	}
 
-	let mut client = connect_database(&get_config(), None)?;
+	let mut client = connect_database(&get_config(), &None)?;
 	client.batch_execute("
 		drop schema public cascade;
 		create schema public;
@@ -938,13 +935,13 @@ fn test_full_no_onboard() -> Result<()> {
 	let migration = &gather_validated_migrations(&get_args(""))?.0[0];
 	assert!(!migration.is_onboard);
 	assert!(migration.previous_version == get_null_string());
-	command_migrate(&get_args(""), &mut connect_database(&get_config(), None)?, false, false)?;
+	command_migrate(&get_args(""), &mut connect_database(&get_config(), &None)?, false, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
 	// # schema.2
 	command_generate(&get_args("schemas/schema.2"), "two", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut connect_database(&get_config(), None)?, false, false)?;
+	command_migrate(&get_args(""), &mut connect_database(&get_config(), &None)?, false, false)?;
 	client.batch_execute("select id, name, flavor from fruit")?;
 
 	// # schema.3
@@ -955,13 +952,13 @@ fn test_full_no_onboard() -> Result<()> {
 	// # schema.1
 	command_generate(&get_args("schemas/schema.1"), "back to one", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut connect_database(&get_config(), None)?, false, false)?;
+	command_migrate(&get_args(""), &mut connect_database(&get_config(), &None)?, false, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
-	command_clean(get_config(), None)?;
+	command_clean(get_config(), &None)?;
 	client.execute("create database garbage_tmp", &[])?;
 	client.batch_execute("comment on database garbage_tmp is 'TEMP DB CREATED BY postgres_migrator';")?;
-	command_clean(get_config(), None)?;
+	command_clean(get_config(), &None)?;
 	// this is just a ghetto way to make sure `clean` actually removes garbage_tmp, since this command will fail otherwise
 	client.execute("create database garbage_tmp", &[])?;
 	client.execute("drop database garbage_tmp", &[])?;
@@ -984,12 +981,7 @@ fn test_full_with_onboard() -> Result<()> {
 			command: Command::Clean,
 			exclude_privileges: false,
 			schema_arg: None,
-			tls_config: TlsConfig {
-				enabled: false,
-				ca_cert: None,
-				accept_invalid_certs: false,
-				accept_invalid_hostnames: false,
-			},
+			tls_config: None,
 		}
 	}
 
@@ -997,7 +989,7 @@ fn test_full_with_onboard() -> Result<()> {
 		list_sql_files(DEFAULT_MIGRATIONS_DIRECTORY).unwrap().len()
 	}
 
-	let mut client = connect_database(&get_config(), None)?;
+	let mut client = connect_database(&get_config(), &None)?;
 	client.batch_execute("
 		drop schema public cascade;
 		create schema public;
@@ -1022,9 +1014,9 @@ fn test_full_with_onboard() -> Result<()> {
 	assert!(migration.is_onboard);
 	assert!(migration.previous_version == get_null_string());
 	// manually apply the schema
-	apply_sql_files(&get_config(), vec![PathBuf::from("schemas/schema.1/schema.sql")], None)?;
+	apply_sql_files(&get_config(), vec![PathBuf::from("schemas/schema.1/schema.sql")], &None)?;
 	// apply migrations, which should work
-	command_migrate(&get_args(""), &mut connect_database(&get_config(), None)?, false, false)?;
+	command_migrate(&get_args(""), &mut connect_database(&get_config(), &None)?, false, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 	// check diff is clean
 	assert!(command_check(&get_args("schemas/schema.1"), Database, Migrations).is_ok());
@@ -1035,7 +1027,7 @@ fn test_full_with_onboard() -> Result<()> {
 	// # schema.2
 	command_generate(&get_args("schemas/schema.2"), "two", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut connect_database(&get_config(), None)?, false, false)?;
+	command_migrate(&get_args(""), &mut connect_database(&get_config(), &None)?, false, false)?;
 	client.batch_execute("select id, name, flavor from fruit")?;
 
 	// # schema.3
@@ -1046,13 +1038,13 @@ fn test_full_with_onboard() -> Result<()> {
 	// # schema.1
 	command_generate(&get_args("schemas/schema.1"), "back to one", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut connect_database(&get_config(), None)?, false, false)?;
+	command_migrate(&get_args(""), &mut connect_database(&get_config(), &None)?, false, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
-	command_clean(get_config(), None)?;
+	command_clean(get_config(), &None)?;
 	client.execute("create database garbage_tmp", &[])?;
 	client.batch_execute("comment on database garbage_tmp is 'TEMP DB CREATED BY postgres_migrator';")?;
-	command_clean(get_config(), None)?;
+	command_clean(get_config(), &None)?;
 	// this is just a ghetto way to make sure `clean` actually removes garbage_tmp, since this command will fail otherwise
 	client.execute("create database garbage_tmp", &[])?;
 	client.execute("drop database garbage_tmp", &[])?;
