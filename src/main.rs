@@ -3,7 +3,6 @@ use chrono::Utc;
 use postgres::Config;
 use anyhow::{anyhow, Result, Context};
 
-
 fn create_timestamp() -> String {
 	Utc::now().format("%Y%m%d%H%M%S").to_string()
 }
@@ -12,7 +11,6 @@ fn create_timestamp() -> String {
 fn test_create_timestamp() {
 	assert_eq!(create_timestamp().len(), 14);
 }
-
 
 fn get_null_string() -> String {
 	"null".to_string()
