@@ -643,6 +643,7 @@ const TEMP_DB_COMMENT: &'static str = "'TEMP DB CREATED BY postgres_migrator'";
 struct TempDb {
 	dbname: String,
 	config: Config,
+	tls_config: Option<TlsConfig>,
 }
 
 impl TempDb {
@@ -657,7 +658,7 @@ impl TempDb {
 		client.execute(&format!(r#"create database "{dbname}""#), &[])?;
 		client.batch_execute(&format!(r#"comment on database "{dbname}" is {TEMP_DB_COMMENT}"#))?;
 
-		Ok(TempDb{dbname, config})
+		Ok(TempDb{dbname, config, tls_config: tls_config.clone()})
 	}
 }
 
@@ -665,7 +666,7 @@ impl Drop for TempDb {
 	fn drop(&mut self) {
 		let dbname = &self.dbname;
 
-		let _ = connect_database(&self.config.dbname("template1"), &None)
+		let _ = connect_database(&self.config.dbname("template1"), &self.tls_config)
 			.map_err(|err| { eprintln!("unable to drop {dbname}: {err}"); err })
 			.and_then(|mut client| {
 				client.batch_execute(&format!(r#"drop database if exists "{dbname}""#))
@@ -730,7 +731,7 @@ struct RawArgs {
 	command: Command,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TlsConfig {
 	ca_cert: Option<PathBuf>,
 	accept_invalid_certs: bool,
