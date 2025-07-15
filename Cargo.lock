@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "postgres_migrator"
-version = "0.6.7"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
