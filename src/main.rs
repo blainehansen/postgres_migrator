@@ -59,6 +59,17 @@ fn test_make_slug() {
 }
 
 
+fn connect_database(config: &Config, tls_config: &Option<TlsConfig>) -> Result<postgres::Client> {
+	match tls_config {
+		Some(tls) => {
+			let tls_connector = make_tls_connector(tls)?;
+			Ok(config.connect(tls_connector)?)
+		}
+		None => Ok(config.connect(postgres::NoTls)?)
+	}
+}
+
+
 fn list_sql_files(directory: &str) -> io::Result<Vec<PathBuf>> {
 	let mut entries = vec![];
 	let sql_extension = Some(std::ffi::OsStr::new("sql"));
@@ -403,8 +414,8 @@ fn compute_diff(source: &Config, target: &Config, exclude_privileges: bool, sche
 }
 
 
-fn apply_sql_files(config: &Config, sql_files: Vec<PathBuf>) -> Result<()> {
-	let mut client = config.connect(postgres::NoTls)?;
+fn apply_sql_files(config: &Config, sql_files: Vec<PathBuf>, tls_config: &Option<TlsConfig>) -> Result<()> {
+	let mut client = connect_database(config, tls_config)?;
 	for sql_file in sql_files {
 		let mut file = fs::File::open(sql_file)?;
 		let mut query = String::new();
@@ -427,10 +438,11 @@ fn command_generate(args: &Args, raw_description: &str, is_onboard: bool) -> Res
 	let description_slug = make_slug(raw_description);
 	let current_version = create_timestamp();
 
-	let source = TempDb::new(&dbname, "migrations", &args.pg_url)?;
-	apply_sql_files(&source.config, migration_files.into_iter().map(|migration_file| migration_file.file_path).collect())?;
-	let target = TempDb::new(&dbname, "schema", &args.pg_url)?;
-	apply_sql_files(&target.config, list_sql_files(&args.schema_directory)?)?;
+	let tls_config = &args.tls_config;
+	let source = TempDb::new(&dbname, "migrations", &args.pg_url, tls_config)?;
+	apply_sql_files(&source.config, migration_files.into_iter().map(|migration_file| migration_file.file_path).collect(), tls_config)?;
+	let target = TempDb::new(&dbname, "schema", &args.pg_url, tls_config)?;
+	apply_sql_files(&target.config, list_sql_files(&args.schema_directory)?, tls_config)?;
 
 	let generated_migration = compute_diff(&source.config, &target.config, args.exclude_privileges, &args.schema_arg)?;
 
@@ -442,7 +454,7 @@ fn command_generate(args: &Args, raw_description: &str, is_onboard: bool) -> Res
 
 
 fn command_compact(args: &Args) -> Result<()> {
-	let mut client = args.pg_url.connect(postgres::NoTls)?;
+	let mut client = connect_database(&args.pg_url, &args.tls_config)?;
 	command_generate(args, "ensuring_current", false)?;
 	command_migrate(args, &mut client, false, false)?;
 
@@ -538,8 +550,8 @@ fn command_migrate(
 	Ok(())
 }
 
-fn command_clean(mut base_config: Config) -> Result<()> {
-	let mut client = base_config.dbname("template1").connect(postgres::NoTls)?;
+fn command_clean(mut base_config: Config, tls_config: &Option<TlsConfig>) -> Result<()> {
+	let mut client = connect_database(&base_config.dbname("template1"), tls_config)?;
 	let query = format!("
 		select databases.datname as dbname
 		from
@@ -570,13 +582,14 @@ fn create_versions_table(client: &mut postgres::Client) -> Result<()> {
 }
 
 fn ensure_db(args: &Args, dbname: &str, base_config: &Config, backend: Backend, need_version_table: bool) -> Result<(Option<TempDb>, Config)> {
+	let tls_config = &args.tls_config;
 	let do_it = |suffix: &'static str, dir: &str| {
-		let temp = TempDb::new(dbname, suffix, base_config)?;
+		let temp = TempDb::new(dbname, suffix, base_config, tls_config)?;
 		if need_version_table {
-			let mut client = temp.config.connect(postgres::NoTls)?;
+			let mut client = connect_database(&temp.config, tls_config)?;
 			create_versions_table(&mut client)?;
 		}
-		apply_sql_files(&temp.config, list_sql_files(dir)?)?;
+		apply_sql_files(&temp.config, list_sql_files(dir)?, tls_config)?;
 
 		let config = temp.config.clone();
 		Ok((Some(temp), config))
@@ -598,7 +611,7 @@ fn compute_backend_diff(args: &Args, source: Backend, target: Backend) -> Result
 
 	let need_version_table: bool = match (source, target) {
 		(_, Backend::Database) | (Backend::Database, _) => {
-			let mut client = args.pg_url.connect(postgres::NoTls)?;
+			let mut client = connect_database(&args.pg_url, &args.tls_config)?;
 			client.query_one(&format!("select exists ({EXISTS_QUERY}) as table_exists"), &[])?.get("table_exists")
 		},
 		_ => false,
@@ -630,21 +643,22 @@ const TEMP_DB_COMMENT: &'static str = "'TEMP DB CREATED BY postgres_migrator'";
 struct TempDb {
 	dbname: String,
 	config: Config,
+	tls_config: Option<TlsConfig>,
 }
 
 impl TempDb {
-	fn new(dbname: &str, suffix: &str, base_config: &Config) -> Result<TempDb> {
+	fn new(dbname: &str, suffix: &str, base_config: &Config, tls_config: &Option<TlsConfig>) -> Result<TempDb> {
 		let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
 		let dbname = format!("{dbname}_{now}_{suffix}");
 
 		let mut config = base_config.clone();
 		config.dbname(&dbname);
 
-		let mut client = base_config.clone().dbname("template1").connect(postgres::NoTls)?;
+		let mut client = connect_database(&base_config.clone().dbname("template1"), tls_config)?;
 		client.execute(&format!(r#"create database "{dbname}""#), &[])?;
 		client.batch_execute(&format!(r#"comment on database "{dbname}" is {TEMP_DB_COMMENT}"#))?;
 
-		Ok(TempDb{dbname, config})
+		Ok(TempDb{dbname, config, tls_config: tls_config.clone()})
 	}
 }
 
@@ -652,17 +666,20 @@ impl Drop for TempDb {
 	fn drop(&mut self) {
 		let dbname = &self.dbname;
 
-		let _ = self.config.dbname("template1").connect(postgres::NoTls)
+		let _ = connect_database(&self.config.dbname("template1"), &self.tls_config)
 			.map_err(|err| { eprintln!("unable to drop {dbname}: {err}"); err })
 			.and_then(|mut client| {
 				client.batch_execute(&format!(r#"drop database if exists "{dbname}""#))
+					.map_err(|e| anyhow::anyhow!(e))
 			})
 			.map_err(|err| { eprintln!("unable to drop {dbname}: {err}"); err });
 	}
 }
 
-use clap::Parser;
 use walkdir::WalkDir;
+use clap::Parser;
+use postgres_native_tls::MakeTlsConnector;
+use native_tls::TlsConnector;
 
 #[derive(Parser, Debug)]
 #[clap(author, version)]
@@ -694,8 +711,55 @@ struct RawArgs {
 	#[clap(long, default_value_t = String::from(DEFAULT_MIGRATIONS_DIRECTORY))]
 	migrations_directory: String,
 
+	/// enable TLS/SSL connections
+	#[clap(long)]
+	tls: bool,
+
+	/// path to CA certificate file for TLS verification
+	#[clap(long, requires = "tls")]
+	tls_ca_cert: Option<PathBuf>,
+
+	/// accept invalid TLS certificates (dangerous!)
+	#[clap(long, requires = "tls")]
+	tls_accept_invalid_certs: bool,
+
+	/// accept invalid hostnames in TLS certificates (dangerous!)
+	#[clap(long, requires = "tls")]
+	tls_accept_invalid_hostnames: bool,
+
 	#[clap(subcommand)]
 	command: Command,
+}
+
+#[derive(Debug, Clone)]
+struct TlsConfig {
+	ca_cert: Option<PathBuf>,
+	accept_invalid_certs: bool,
+	accept_invalid_hostnames: bool,
+}
+
+fn make_tls_connector(tls_config: &TlsConfig) -> Result<MakeTlsConnector> {
+	let mut builder = TlsConnector::builder();
+	
+	if tls_config.accept_invalid_certs {
+		builder.danger_accept_invalid_certs(true);
+	}
+	
+	if tls_config.accept_invalid_hostnames {
+		builder.danger_accept_invalid_hostnames(true);
+	}
+	
+	if let Some(ca_cert_path) = &tls_config.ca_cert {
+		let cert_file = std::fs::read(ca_cert_path)
+			.context("Failed to read CA certificate file")?;
+		let cert = native_tls::Certificate::from_pem(&cert_file)
+			.context("Failed to parse CA certificate")?;
+		builder.add_root_certificate(cert);
+	}
+	
+	let connector = builder.build()
+		.context("Failed to build TLS connector")?;
+	Ok(MakeTlsConnector::new(connector))
 }
 
 #[derive(Debug)]
@@ -705,12 +769,16 @@ struct Args {
 	schema_arg: Option<SchemaArg>,
 	schema_directory: String,
 	migrations_directory: String,
+	tls_config: Option<TlsConfig>,
 	command: Command,
 }
 
 impl Args {
 	fn from_raw_args(raw_args: RawArgs) -> Result<Args> {
-		let RawArgs{pg_url, exclude_privileges, schema, exclude_schema, schema_directory, migrations_directory, command} = raw_args;
+		let RawArgs {
+			pg_url, exclude_privileges, schema, exclude_schema, schema_directory, migrations_directory, 
+			tls, tls_ca_cert, tls_accept_invalid_certs, tls_accept_invalid_hostnames, command,
+		} = raw_args;
 
 		let schema_arg = match (schema, exclude_schema) {
 			(Some(schema), Some(exclude_schema)) => {
@@ -721,10 +789,21 @@ impl Args {
 			(None, None) => None,
 		};
 
+		let tls_config = if tls {
+			Some(TlsConfig {
+				ca_cert: tls_ca_cert,
+				accept_invalid_certs: tls_accept_invalid_certs,
+				accept_invalid_hostnames: tls_accept_invalid_hostnames,
+			})
+		} else {
+			None
+		};
+
 		Ok(Args {
 			pg_url, exclude_privileges,
 			schema_directory, migrations_directory,
 			schema_arg,
+			tls_config,
 			command,
 		})
 	}
@@ -789,7 +868,7 @@ fn main() -> Result<()> {
 			command_generate(&args, &migration_description, is_onboard)?;
 		},
 		Command::Migrate {actually_perform_onboard_migrations, dry_run} => {
-			let mut client = args.pg_url.connect(postgres::NoTls)?;
+			let mut client = connect_database(&args.pg_url, &args.tls_config)?;
 			command_migrate(&args, &mut client, actually_perform_onboard_migrations, dry_run)?;
 		},
 		Command::Compact => {
@@ -802,7 +881,7 @@ fn main() -> Result<()> {
 			command_diff(&args, source, target)?;
 		},
 		Command::Clean => {
-			command_clean(args.pg_url)?;
+			command_clean(args.pg_url, &args.tls_config)?;
 		},
 	}
 
@@ -824,6 +903,7 @@ fn test_full_no_onboard() -> Result<()> {
 			command: Command::Clean,
 			exclude_privileges: false,
 			schema_arg: None,
+			tls_config: None,
 		}
 	}
 
@@ -831,7 +911,7 @@ fn test_full_no_onboard() -> Result<()> {
 		list_sql_files(DEFAULT_MIGRATIONS_DIRECTORY).unwrap().len()
 	}
 
-	let mut client = get_config().connect(postgres::NoTls)?;
+	let mut client = connect_database(&get_config(), &None)?;
 	client.batch_execute("
 		drop schema public cascade;
 		create schema public;
@@ -854,13 +934,13 @@ fn test_full_no_onboard() -> Result<()> {
 	let migration = &gather_validated_migrations(&get_args(""))?.0[0];
 	assert!(!migration.is_onboard);
 	assert!(migration.previous_version == get_null_string());
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false, false)?;
+	command_migrate(&get_args(""), &mut connect_database(&get_config(), &None)?, false, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
 	// # schema.2
 	command_generate(&get_args("schemas/schema.2"), "two", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false, false)?;
+	command_migrate(&get_args(""), &mut connect_database(&get_config(), &None)?, false, false)?;
 	client.batch_execute("select id, name, flavor from fruit")?;
 
 	// # schema.3
@@ -871,13 +951,13 @@ fn test_full_no_onboard() -> Result<()> {
 	// # schema.1
 	command_generate(&get_args("schemas/schema.1"), "back to one", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false, false)?;
+	command_migrate(&get_args(""), &mut connect_database(&get_config(), &None)?, false, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
-	command_clean(get_config())?;
+	command_clean(get_config(), &None)?;
 	client.execute("create database garbage_tmp", &[])?;
 	client.batch_execute("comment on database garbage_tmp is 'TEMP DB CREATED BY postgres_migrator';")?;
-	command_clean(get_config())?;
+	command_clean(get_config(), &None)?;
 	// this is just a ghetto way to make sure `clean` actually removes garbage_tmp, since this command will fail otherwise
 	client.execute("create database garbage_tmp", &[])?;
 	client.execute("drop database garbage_tmp", &[])?;
@@ -900,6 +980,7 @@ fn test_full_with_onboard() -> Result<()> {
 			command: Command::Clean,
 			exclude_privileges: false,
 			schema_arg: None,
+			tls_config: None,
 		}
 	}
 
@@ -907,7 +988,7 @@ fn test_full_with_onboard() -> Result<()> {
 		list_sql_files(DEFAULT_MIGRATIONS_DIRECTORY).unwrap().len()
 	}
 
-	let mut client = get_config().connect(postgres::NoTls)?;
+	let mut client = connect_database(&get_config(), &None)?;
 	client.batch_execute("
 		drop schema public cascade;
 		create schema public;
@@ -932,9 +1013,9 @@ fn test_full_with_onboard() -> Result<()> {
 	assert!(migration.is_onboard);
 	assert!(migration.previous_version == get_null_string());
 	// manually apply the schema
-	apply_sql_files(&get_config(), vec![PathBuf::from("schemas/schema.1/schema.sql")])?;
+	apply_sql_files(&get_config(), vec![PathBuf::from("schemas/schema.1/schema.sql")], &None)?;
 	// apply migrations, which should work
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false, false)?;
+	command_migrate(&get_args(""), &mut connect_database(&get_config(), &None)?, false, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 	// check diff is clean
 	assert!(command_check(&get_args("schemas/schema.1"), Database, Migrations).is_ok());
@@ -945,7 +1026,7 @@ fn test_full_with_onboard() -> Result<()> {
 	// # schema.2
 	command_generate(&get_args("schemas/schema.2"), "two", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false, false)?;
+	command_migrate(&get_args(""), &mut connect_database(&get_config(), &None)?, false, false)?;
 	client.batch_execute("select id, name, flavor from fruit")?;
 
 	// # schema.3
@@ -956,13 +1037,13 @@ fn test_full_with_onboard() -> Result<()> {
 	// # schema.1
 	command_generate(&get_args("schemas/schema.1"), "back to one", false)?;
 	assert_eq!(get_migration_count(), 2);
-	command_migrate(&get_args(""), &mut get_config().connect(postgres::NoTls)?, false, false)?;
+	command_migrate(&get_args(""), &mut connect_database(&get_config(), &None)?, false, false)?;
 	client.batch_execute("select id, name, color from fruit")?;
 
-	command_clean(get_config())?;
+	command_clean(get_config(), &None)?;
 	client.execute("create database garbage_tmp", &[])?;
 	client.batch_execute("comment on database garbage_tmp is 'TEMP DB CREATED BY postgres_migrator';")?;
-	command_clean(get_config())?;
+	command_clean(get_config(), &None)?;
 	// this is just a ghetto way to make sure `clean` actually removes garbage_tmp, since this command will fail otherwise
 	client.execute("create database garbage_tmp", &[])?;
 	client.execute("drop database garbage_tmp", &[])?;

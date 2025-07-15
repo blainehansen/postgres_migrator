@@ -56,7 +56,6 @@ You can put any valid sql in the `migrations` files, you don't have to accept th
 
 `postgres_migrator` is distributed as a docker image, `blainehansen/postgres_migrator`. You can run it using `docker run`, and since the cli needs to interact with a postgres database, read schema files, and read/write migration files, it needs quite a few options:
 
-
 ```bash
 docker run --rm -it --network host -u $(id -u ${USER}):$(id -g ${USER}) -v $(pwd):/working blainehansen/postgres_migrator <args>
 ```
@@ -145,6 +144,18 @@ OPTIONS:
 
         --schema-directory <SCHEMA_DIRECTORY>
             directory where the declarative schema is located [default: schema]
+
+        --tls
+            enable TLS/SSL connections
+
+        --tls-accept-invalid-certs
+            accept invalid TLS certificates
+
+        --tls-accept-invalid-hostnames
+            accept invalid hostnames in TLS certificates
+
+        --tls-ca-cert <TLS_CA_CERT>
+            path to CA certificate file for TLS verification
 
     -V, --version
             Print version information

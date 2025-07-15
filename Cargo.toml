@@ -14,6 +14,8 @@ categories = ["command-line-utilities", "database"]
 
 [dependencies]
 postgres = "0.19"
+postgres-native-tls = "0.5"
+native-tls = "0.2"
 chrono = "0.4"
 regex = "1"
 anyhow = "1.0"
