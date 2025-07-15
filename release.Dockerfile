@@ -12,8 +12,8 @@ COPY src ./src
 RUN cargo install --path .
 
 
-FROM python:alpine
-RUN pip install migra~=3.0.0 psycopg2-binary~=2.9.3 setuptools
+FROM python:3.13-alpine
+RUN pip install migra~=3.0.0 psycopg2-binary~=2.9.3 setuptools==79.0.1
 
 COPY --from=builder /usr/local/cargo/bin/postgres_migrator /usr/bin/
 
