@@ -1,6 +1,7 @@
-FROM rust:latest AS builder
+FROM rust:alpine AS builder
 WORKDIR /usr/src/
-RUN rustup target add x86_64-unknown-linux-musl
+
+RUN apk add --no-cache musl-dev openssl-dev pkgconfig openssl-libs-static
 
 RUN USER=root cargo new postgres_migrator
 WORKDIR /usr/src/postgres_migrator
@@ -8,7 +9,7 @@ COPY Cargo.toml Cargo.lock ./
 RUN cargo build --release
 
 COPY src ./src
-RUN cargo install --target x86_64-unknown-linux-musl --path .
+RUN cargo install --path .
 
 
 FROM python:alpine
