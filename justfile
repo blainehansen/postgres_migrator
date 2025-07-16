@@ -41,6 +41,7 @@ release SEMVER_PORTION: _status_clean build integration_test
 	set -euxo pipefail
 
 	cargo bump {{SEMVER_PORTION}}
+	cargo update -p postgres_migrator
 
 	VERSION=$(grep '^version = "' Cargo.toml)
 	[[ $VERSION =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]
